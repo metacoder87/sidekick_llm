@@ -1,0 +1,12 @@
+node_modules/
+dist/
+out/
+.DS_Store
+Thumbs.db
+.vite/
+coverage/
+*.db
+*.db-shm
+*.db-wal
+.venv/
+*.log
