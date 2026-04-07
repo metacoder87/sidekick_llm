@@ -1,0 +1,27 @@
+{
+  "models": {
+    "list": "models:list",
+    "getActive": "models:getActive",
+    "setActive": "models:setActive"
+  },
+  "ollama": {
+    "status": "ollama:getStatus"
+  },
+  "chat": {
+    "createConversation": "chat:createConversation",
+    "listConversations": "chat:listConversations",
+    "getConversation": "chat:getConversation",
+    "renameConversation": "chat:renameConversation",
+    "deleteConversation": "chat:deleteConversation",
+    "searchConversations": "chat:searchConversations",
+    "sendMessageStream": "chat:sendMessageStream",
+    "cancelGeneration": "chat:cancelGeneration",
+    "exportConversation": "chat:exportConversation",
+    "exportAll": "chat:exportAll"
+  },
+  "events": {
+    "streamUpdate": "events:chat-stream-update",
+    "streamComplete": "events:chat-stream-complete",
+    "streamError": "events:chat-stream-error"
+  }
+}
