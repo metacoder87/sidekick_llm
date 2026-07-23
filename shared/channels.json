@@ -34,6 +34,7 @@
   },
   "specialist": {
     "list": "specialist:list",
+    "get": "specialist:get",
     "create": "specialist:create",
     "update": "specialist:update",
     "delete": "specialist:delete"

@@ -2,6 +2,7 @@ import { useDeferredValue, useEffect, useRef, useState } from 'react';
 
 import ChatView from './components/ChatView';
 import Composer from './components/Composer';
+import ResizableDivider from './components/ResizableDivider';
 import SettingsModal from './components/SettingsModal';
 import Sidebar from './components/Sidebar';
 import SpecialistModal from './components/SpecialistModal';
@@ -45,6 +46,7 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [theme, setTheme] = useState('cyberpunk');
+  const [sidebarWidth, setSidebarWidth] = useState(320);
 
   // Modals state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -65,6 +67,12 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
+
+  function handleResizeSidebar(newX) {
+    // Clamp sidebar width between 200px and 520px
+    const clamped = Math.max(200, Math.min(newX, 520));
+    setSidebarWidth(clamped);
+  }
 
   async function handleToggleTheme(newTheme) {
     setTheme(newTheme);
@@ -401,17 +409,13 @@ export default function App() {
     }
   }
 
-  let headerCopy = 'All history is stored locally in SQLite.';
-  if (notice) {
-    headerCopy = notice;
-  } else if (!ollamaStatus.available) {
-    headerCopy = 'Start Ollama to begin local inference.';
-  } else if (!activeModel) {
-    headerCopy = 'Select an available model in Settings.';
-  }
+  const activeTitle = activeConversation?.title || 'New Conversation';
 
   return (
-    <main className="app-shell">
+    <main
+      className="app-shell"
+      style={{ gridTemplateColumns: `${sidebarWidth}px auto 1fr` }}
+    >
       <Sidebar
         conversations={conversations}
         activeConversationId={activeConversationId}
@@ -427,13 +431,29 @@ export default function App() {
         activeSpecialistHub={activeSpecialistHub}
       />
 
+      <ResizableDivider onResize={handleResizeSidebar} />
+
       <section className="workspace">
         <header className="workspace__banner">
-          <div>
-            <p>Session</p>
-            <h2>{headerCopy}</h2>
+          <div className="workspace__banner-info">
+            <h2 className="header-chat-title">{activeTitle}</h2>
+            {notice ? <span className="notice-badge">{notice}</span> : null}
           </div>
           <div className="workspace__banner-right">
+            {activeModel ? (
+              <span
+                className="model-pill-header"
+                onClick={() => setIsSettingsOpen(true)}
+                title="Click to change local model"
+              >
+                🤖 {activeModel}
+              </span>
+            ) : null}
+            {activeSpecialistHub ? (
+              <span className="specialist-pill-header">
+                ⚡ {activeSpecialistHub.name}
+              </span>
+            ) : null}
             <ThemeToggle theme={theme} onToggle={handleToggleTheme} />
           </div>
         </header>

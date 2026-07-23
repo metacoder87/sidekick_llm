@@ -76,6 +76,10 @@ function registerIpcHandlers({ userDataPath }) {
     return repository.listSpecialistHubs();
   });
 
+  ipcMain.handle(channels.specialist.get, async (_event, id) => {
+    return repository.getSpecialistHub(id);
+  });
+
   ipcMain.handle(channels.specialist.create, async (_event, hubData) => {
     return repository.createSpecialistHub(hubData);
   });
@@ -97,12 +101,20 @@ function registerIpcHandlers({ userDataPath }) {
       model = models[0]?.name || '';
     }
 
+    const allSettings = repository.getAllSettings();
+
     return researchWorker.runWebDeepResearch({
       hubId,
       topic,
       seedUrls: seedUrls || [],
       depth: depth || 1,
       model,
+      searchOptions: {
+        provider: allSettings.searchProvider || 'duckduckgo',
+        searxngUrl: allSettings.searxngUrl,
+        tavilyApiKey: allSettings.tavilyApiKey,
+        braveApiKey: allSettings.braveApiKey,
+      },
       onProgress: (progress) => {
         event.sender.send(channels.events.researchProgress, { hubId, ...progress });
       },

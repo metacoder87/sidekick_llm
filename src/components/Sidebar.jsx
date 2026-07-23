@@ -16,32 +16,44 @@ export default function Sidebar({
 }) {
   return (
     <aside className="sidebar">
-      <div className="sidebar__brand">
-        <div>
+      <div className="sidebar__header-bar">
+        <div className="sidebar__brand">
           <p>Sidekick LLM</p>
-          <h1>Offline Workspace</h1>
         </div>
-        <button type="button" className="primary-button" onClick={onNewConversation}>
-          + New Chat
-        </button>
-      </div>
-
-      <div className="sidebar__actions-row">
-        <button type="button" className="secondary-button expert-picker-trigger" onClick={onOpenSpecialistPicker}>
-          ⚡ Experts {activeSpecialistHub ? `(${activeSpecialistHub.name})` : ''}
-        </button>
-        <button type="button" className="secondary-button" onClick={onOpenSettings} title="Settings & Memory Vault">
-          ⚙️ Settings
-        </button>
+        <div className="sidebar__top-actions">
+          <button
+            type="button"
+            className="icon-button primary-icon-button"
+            onClick={onNewConversation}
+            title="Start New Chat"
+          >
+            ➕
+          </button>
+          <button
+            type="button"
+            className={`icon-button ${activeSpecialistHub ? 'active-expert-icon' : ''}`}
+            onClick={onOpenSpecialistPicker}
+            title={activeSpecialistHub ? `Active Expert: ${activeSpecialistHub.name}` : 'AI Experts on Hand'}
+          >
+            ⚡
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={onOpenSettings}
+            title="Settings & Memory Vault"
+          >
+            ⚙️
+          </button>
+        </div>
       </div>
 
       <label className="search-field">
-        <span>Search history</span>
         <input
           type="search"
           value={searchQuery}
           onChange={(event) => onSearchQueryChange(event.target.value)}
-          placeholder="Find by title or message"
+          placeholder="🔍 Search history..."
         />
       </label>
 
@@ -54,7 +66,7 @@ export default function Sidebar({
       />
 
       <div className="sidebar__footer-actions">
-        <button type="button" className="ghost-button" onClick={onExportAll}>
+        <button type="button" className="ghost-button" onClick={onExportAll} title="Export history to JSON">
           Export History
         </button>
       </div>

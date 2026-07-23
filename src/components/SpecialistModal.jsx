@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 export default function SpecialistModal({
   isOpen,
@@ -15,13 +15,27 @@ export default function SpecialistModal({
   const [researchTopic, setResearchTopic] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [completed, setCompleted] = useState(false);
+
+  useEffect(() => {
+    if (sidekick?.events?.onResearchProgress) {
+      const removeProgress = sidekick.events.onResearchProgress((payload) => {
+        if (!hubToEdit || payload.hubId === hubToEdit.id) {
+          setStatusMessage(payload.message || 'Processing research...');
+        }
+      });
+      return () => removeProgress();
+    }
+  }, [sidekick, hubToEdit]);
 
   if (!isOpen) return null;
 
-  async function handleSave(e) {
+  async function handleSaveAndTrain(e) {
     e.preventDefault();
     if (!name.trim() || !sidekick) return;
     setLoading(true);
+    setStatusMessage('Saving Specialist Hub settings...');
+
     try {
       let savedHub;
       if (isEditing) {
@@ -40,23 +54,74 @@ export default function SpecialistModal({
           icon,
         });
       }
+
       onHubSaved(savedHub);
-      onClose();
+
+      // If initial research topic is entered, run deep research now
+      if (researchTopic.trim()) {
+        setStatusMessage(`Running initial Web Deep Research on "${researchTopic.trim()}"...`);
+        try {
+          const res = await sidekick.research.start({
+            hubId: savedHub.id,
+            topic: researchTopic.trim(),
+          });
+          setStatusMessage(res.message || '✅ Deep research complete!');
+          setCompleted(true);
+          const updated = await sidekick.specialist.get(savedHub.id).catch(() => null);
+          if (updated) onHubSaved(updated);
+        } catch (resErr) {
+          setStatusMessage(`Research Warning: ${resErr.message}`);
+        }
+      } else {
+        onClose();
+      }
     } catch (err) {
-      setStatusMessage(`Error: ${err.message}`);
+      setStatusMessage(`Error saving hub: ${err.message}`);
     } finally {
       setLoading(false);
     }
   }
 
   async function handleIngestFile() {
-    if (!hubToEdit?.id || !sidekick) return;
+    const hubId = hubToEdit?.id;
+    if (!sidekick) return;
+
+    if (!hubId) {
+      if (!name.trim()) {
+        setStatusMessage('Please enter a Specialist Name first.');
+        return;
+      }
+      setLoading(true);
+      try {
+        const createdHub = await sidekick.specialist.create({
+          name,
+          description,
+          systemPrompt,
+          icon,
+        });
+        onHubSaved(createdHub);
+        const res = await sidekick.research.ingestFile({ hubId: createdHub.id });
+        if (res.success) {
+          setStatusMessage(res.message || '✅ File ingested successfully!');
+          setCompleted(true);
+          const updated = await sidekick.specialist.get(createdHub.id).catch(() => null);
+          if (updated) onHubSaved(updated);
+        }
+      } catch (err) {
+        setStatusMessage(`Error: ${err.message}`);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     setStatusMessage('Selecting document file...');
     try {
-      const res = await sidekick.research.ingestFile({ hubId: hubToEdit.id });
+      const res = await sidekick.research.ingestFile({ hubId });
       if (res.success) {
-        setStatusMessage(res.message || 'File ingested successfully!');
-        const updated = await sidekick.specialist.get(hubToEdit.id);
+        setStatusMessage(res.message || '✅ File ingested successfully!');
+        setCompleted(true);
+        const updated = await sidekick.specialist.get(hubId).catch(() => null);
         if (updated) onHubSaved(updated);
       } else if (!res.cancelled) {
         setStatusMessage('Failed to ingest document.');
@@ -66,20 +131,45 @@ export default function SpecialistModal({
     }
   }
 
-  async function handleStartResearch(e) {
+  async function handleRunResearchNow(e) {
     e.preventDefault();
-    if (!hubToEdit?.id || !researchTopic.trim() || !sidekick) return;
+    if (!researchTopic.trim() || !sidekick) return;
+
+    let targetHubId = hubToEdit?.id;
+    if (!targetHubId) {
+      if (!name.trim()) {
+        setStatusMessage('Please enter a Specialist Name first.');
+        return;
+      }
+      setLoading(true);
+      try {
+        const createdHub = await sidekick.specialist.create({
+          name,
+          description,
+          systemPrompt,
+          icon,
+        });
+        targetHubId = createdHub.id;
+        onHubSaved(createdHub);
+      } catch (err) {
+        setStatusMessage(`Error: ${err.message}`);
+        setLoading(false);
+        return;
+      }
+    }
+
     setStatusMessage(`Starting web deep research for "${researchTopic}"...`);
     setLoading(true);
 
     try {
       const res = await sidekick.research.start({
-        hubId: hubToEdit.id,
+        hubId: targetHubId,
         topic: researchTopic.trim(),
       });
-      setStatusMessage(res.message || 'Deep research complete!');
+      setStatusMessage(res.message || '✅ Deep research complete!');
+      setCompleted(true);
       setResearchTopic('');
-      const updated = await sidekick.specialist.get(hubToEdit.id);
+      const updated = await sidekick.specialist.get(targetHubId).catch(() => null);
       if (updated) onHubSaved(updated);
     } catch (err) {
       setStatusMessage(`Research Error: ${err.message}`);
@@ -94,7 +184,7 @@ export default function SpecialistModal({
         <div className="modal-header">
           <div>
             <p>Specialist Knowledge Hub</p>
-            <h2>{isEditing ? `Manage Hub: ${hubToEdit.name}` : 'Create AI Expert Hub'}</h2>
+            <h2>{isEditing ? `Manage Hub: ${hubToEdit.name}` : '⚡ Create & Train AI Expert'}</h2>
           </div>
           <button type="button" className="ghost-button" onClick={onClose}>
             ✕ Close
@@ -103,7 +193,7 @@ export default function SpecialistModal({
 
         {statusMessage ? <div className="status-notice-banner">{statusMessage}</div> : null}
 
-        <form onSubmit={handleSave} className="profile-form">
+        <form onSubmit={handleSaveAndTrain} className="profile-form">
           <div className="form-grid">
             <label className="form-field">
               <span>Specialist Name</span>
@@ -111,7 +201,7 @@ export default function SpecialistModal({
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. React 19 Expert, Legal Advisor"
+                placeholder="e.g. React 19 Expert, Tax Law Advisor"
                 required
               />
             </label>
@@ -138,33 +228,39 @@ export default function SpecialistModal({
           </label>
 
           <label className="form-field">
-            <span>Expert System Persona & Rules</span>
+            <span>Expert Persona & Instructions</span>
             <textarea
               rows={3}
               value={systemPrompt}
               onChange={(e) => setSystemPrompt(e.target.value)}
-              placeholder="e.g. You are a world-class React 19 architect. Provide expert, production-grade solutions."
+              placeholder="e.g. You are a world-class React 19 engineer. Provide authoritative, production-grade solutions."
             />
           </label>
 
-          <div className="modal-actions">
-            <button type="button" className="secondary-button" onClick={onClose}>
-              Cancel
-            </button>
-            <button type="submit" className="primary-button" disabled={loading || !name.trim()}>
-              {loading ? 'Saving...' : isEditing ? 'Save Changes' : 'Create Specialist'}
-            </button>
-          </div>
-        </form>
-
-        {isEditing ? (
           <div className="specialist-vault-section">
-            <h3>Knowledge Vault Ingestion</h3>
+            <h3>Knowledge Vault Training & Ingestion</h3>
             <p className="modal-description">
-              Upload PDFs/Docs or run automated Web Deep Research to populate this Specialist's vector vault. ({hubToEdit.chunkCount || 0} chunks cached)
+              Provide a research topic or upload documents (PDF, TXT, MD) to train this AI Expert's RAG knowledge vault. {isEditing && hubToEdit.chunkCount ? `(${hubToEdit.chunkCount} vector chunks cached)` : ''}
             </p>
 
             <div className="vault-actions-grid">
+              <div className="research-inline-form">
+                <input
+                  type="text"
+                  placeholder="Enter topic or URLs for Web Deep Research..."
+                  value={researchTopic}
+                  onChange={(e) => setResearchTopic(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={handleRunResearchNow}
+                  disabled={loading || !researchTopic.trim()}
+                >
+                  Run Deep Research
+                </button>
+              </div>
+
               <button
                 type="button"
                 className="secondary-button vault-upload-btn"
@@ -173,25 +269,18 @@ export default function SpecialistModal({
               >
                 📄 Upload & Index PDF / Text Document
               </button>
-
-              <form onSubmit={handleStartResearch} className="research-inline-form">
-                <input
-                  type="text"
-                  placeholder="Enter topic or URLs for Web Deep Research..."
-                  value={researchTopic}
-                  onChange={(e) => setResearchTopic(e.target.value)}
-                />
-                <button
-                  type="submit"
-                  className="primary-button"
-                  disabled={loading || !researchTopic.trim()}
-                >
-                  Run Deep Research
-                </button>
-              </form>
             </div>
           </div>
-        ) : null}
+
+          <div className="modal-actions">
+            <button type="button" className="secondary-button" onClick={onClose}>
+              {completed ? 'Done / Close' : 'Cancel'}
+            </button>
+            <button type="submit" className="primary-button" disabled={loading || !name.trim()}>
+              {loading ? 'Processing...' : isEditing ? 'Save Changes' : '⚡ Save & Train Expert'}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

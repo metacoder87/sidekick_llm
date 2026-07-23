@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('sidekick', {
   },
   specialist: {
     list: () => ipcRenderer.invoke(channels.specialist.list),
+    get: (id) => ipcRenderer.invoke(channels.specialist.get, id),
     create: (hubData) => ipcRenderer.invoke(channels.specialist.create, hubData),
     update: (hubData) => ipcRenderer.invoke(channels.specialist.update, hubData),
     delete: (id) => ipcRenderer.invoke(channels.specialist.delete, id),

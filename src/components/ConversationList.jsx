@@ -46,15 +46,13 @@ export default function ConversationList({
           <article
             key={conversation.id}
             className={`conversation-card ${isActive ? 'active' : ''}`}
+            onClick={() => onSelect(conversation.id)}
           >
-            <button
-              type="button"
-              className="conversation-card__body"
-              onClick={() => onSelect(conversation.id)}
-            >
+            <div className="conversation-card__content">
               {isEditing ? (
                 <input
                   autoFocus
+                  className="conversation-rename-input"
                   value={draftTitle}
                   onChange={(event) => setDraftTitle(event.target.value)}
                   onClick={(event) => event.stopPropagation()}
@@ -70,28 +68,42 @@ export default function ConversationList({
                   }}
                 />
               ) : (
-                <strong>{conversation.title}</strong>
+                <strong className="conversation-title" title={conversation.title}>
+                  {conversation.title}
+                </strong>
               )}
-              <span>{conversation.snippet || formatTimestamp(conversation.lastMessageAt || conversation.updatedAt)}</span>
-            </button>
+            </div>
 
-            <div className="conversation-card__actions">
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => startRename(conversation)}
-                aria-label={`Rename ${conversation.title}`}
-              >
-                Rename
-              </button>
-              <button
-                type="button"
-                className="ghost-button danger"
-                onClick={() => onDelete(conversation.id)}
-                aria-label={`Delete ${conversation.title}`}
-              >
-                Delete
-              </button>
+            <div className="conversation-card__hover-meta">
+              <span className="conversation-time">
+                {formatTimestamp(conversation.lastMessageAt || conversation.updatedAt)}
+              </span>
+              <div className="conversation-card__actions">
+                <button
+                  type="button"
+                  className="icon-action-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    startRename(conversation);
+                  }}
+                  title="Edit title"
+                  aria-label={`Rename ${conversation.title}`}
+                >
+                  ✏️
+                </button>
+                <button
+                  type="button"
+                  className="icon-action-btn danger"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(conversation.id);
+                  }}
+                  title="Delete conversation"
+                  aria-label={`Delete ${conversation.title}`}
+                >
+                  🗑️
+                </button>
+              </div>
             </div>
           </article>
         );
