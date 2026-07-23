@@ -19,9 +19,33 @@
     "exportConversation": "chat:exportConversation",
     "exportAll": "chat:exportAll"
   },
+  "settings": {
+    "get": "settings:get",
+    "set": "settings:set"
+  },
+  "memory": {
+    "list": "memory:list",
+    "add": "memory:add",
+    "delete": "memory:delete"
+  },
+  "profile": {
+    "get": "profile:get",
+    "set": "profile:set"
+  },
+  "specialist": {
+    "list": "specialist:list",
+    "create": "specialist:create",
+    "update": "specialist:update",
+    "delete": "specialist:delete"
+  },
+  "research": {
+    "start": "research:start",
+    "ingestFile": "research:ingestFile"
+  },
   "events": {
     "streamUpdate": "events:chat-stream-update",
     "streamComplete": "events:chat-stream-complete",
-    "streamError": "events:chat-stream-error"
+    "streamError": "events:chat-stream-error",
+    "researchProgress": "events:research-progress"
   }
 }

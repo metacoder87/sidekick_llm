@@ -29,9 +29,33 @@ contextBridge.exposeInMainWorld('sidekick', {
     exportConversation: (conversationId) => ipcRenderer.invoke(channels.chat.exportConversation, conversationId),
     exportAll: () => ipcRenderer.invoke(channels.chat.exportAll),
   },
+  settings: {
+    get: () => ipcRenderer.invoke(channels.settings.get),
+    set: (key, value) => ipcRenderer.invoke(channels.settings.set, { key, value }),
+  },
+  memory: {
+    list: () => ipcRenderer.invoke(channels.memory.list),
+    add: (payload) => ipcRenderer.invoke(channels.memory.add, payload),
+    delete: (id) => ipcRenderer.invoke(channels.memory.delete, id),
+  },
+  profile: {
+    get: () => ipcRenderer.invoke(channels.profile.get),
+    set: (profileObj) => ipcRenderer.invoke(channels.profile.set, profileObj),
+  },
+  specialist: {
+    list: () => ipcRenderer.invoke(channels.specialist.list),
+    create: (hubData) => ipcRenderer.invoke(channels.specialist.create, hubData),
+    update: (hubData) => ipcRenderer.invoke(channels.specialist.update, hubData),
+    delete: (id) => ipcRenderer.invoke(channels.specialist.delete, id),
+  },
+  research: {
+    start: (payload) => ipcRenderer.invoke(channels.research.start, payload),
+    ingestFile: (payload) => ipcRenderer.invoke(channels.research.ingestFile, payload),
+  },
   events: {
     onStreamUpdate: (listener) => subscribe(channels.events.streamUpdate, listener),
     onStreamComplete: (listener) => subscribe(channels.events.streamComplete, listener),
     onStreamError: (listener) => subscribe(channels.events.streamError, listener),
+    onResearchProgress: (listener) => subscribe(channels.events.researchProgress, listener),
   },
 });

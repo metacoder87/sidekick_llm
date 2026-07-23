@@ -6,6 +6,10 @@ const { dialog, ipcMain } = require('electron');
 const channels = require('../shared/channels.json');
 const { ConversationRepository } = require('./repository.cjs');
 const { OllamaService } = require('./ollama.cjs');
+const { performWebSearch } = require('./search/searchService.cjs');
+const { scrapeTopResults } = require('./search/scraper.cjs');
+const { MemoryManager } = require('./memory/memoryManager.cjs');
+const { DeepResearchWorker } = require('./research/deepResearch.cjs');
 
 function stampFilename(prefix) {
   const value = new Date().toISOString().replace(/[:.]/g, '-');
@@ -17,6 +21,8 @@ function registerIpcHandlers({ userDataPath }) {
   const ollama = new OllamaService({
     getBaseUrl: () => repository.getSetting('ollamaBaseUrl'),
   });
+  const memoryManager = new MemoryManager({ repository, ollama });
+  const researchWorker = new DeepResearchWorker({ repository, ollama });
   const activeGenerations = new Map();
 
   ipcMain.handle(channels.models.list, async () => {
@@ -44,6 +50,107 @@ function registerIpcHandlers({ userDataPath }) {
 
   ipcMain.handle(channels.ollama.status, async () => {
     return ollama.getStatus();
+  });
+
+  // Settings Handlers
+  ipcMain.handle(channels.settings.get, async () => {
+    return repository.getAllSettings();
+  });
+
+  ipcMain.handle(channels.settings.set, async (_event, { key, value }) => {
+    repository.setSetting(key, value);
+    return repository.getAllSettings();
+  });
+
+  // Profile Handlers
+  ipcMain.handle(channels.profile.get, async () => {
+    return repository.getUserProfile();
+  });
+
+  ipcMain.handle(channels.profile.set, async (_event, profileObj) => {
+    return repository.setUserProfile(profileObj);
+  });
+
+  // Specialist Hub Handlers
+  ipcMain.handle(channels.specialist.list, async () => {
+    return repository.listSpecialistHubs();
+  });
+
+  ipcMain.handle(channels.specialist.create, async (_event, hubData) => {
+    return repository.createSpecialistHub(hubData);
+  });
+
+  ipcMain.handle(channels.specialist.update, async (_event, hubData) => {
+    return repository.updateSpecialistHub(hubData);
+  });
+
+  ipcMain.handle(channels.specialist.delete, async (_event, id) => {
+    const success = repository.deleteSpecialistHub(id);
+    return { success };
+  });
+
+  // Deep Research & Document Ingestion Handlers
+  ipcMain.handle(channels.research.start, async (event, { hubId, topic, seedUrls, depth }) => {
+    let model = repository.getSetting('activeModel');
+    if (!model) {
+      const models = await ollama.listModels();
+      model = models[0]?.name || '';
+    }
+
+    return researchWorker.runWebDeepResearch({
+      hubId,
+      topic,
+      seedUrls: seedUrls || [],
+      depth: depth || 1,
+      model,
+      onProgress: (progress) => {
+        event.sender.send(channels.events.researchProgress, { hubId, ...progress });
+      },
+    });
+  });
+
+  ipcMain.handle(channels.research.ingestFile, async (event, { hubId }) => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select PDF or Text Document for Specialist Vault',
+      filters: [
+        { name: 'Documents', extensions: ['pdf', 'txt', 'md', 'json', 'csv'] },
+      ],
+      properties: ['openFile'],
+    });
+
+    if (result.canceled || !result.filePaths[0]) {
+      return { success: false, cancelled: true };
+    }
+
+    const filePath = result.filePaths[0];
+    let model = repository.getSetting('activeModel');
+    if (!model) {
+      const models = await ollama.listModels();
+      model = models[0]?.name || '';
+    }
+
+    return researchWorker.ingestFilePath({
+      hubId,
+      filePath,
+      model,
+      onProgress: (progress) => {
+        event.sender.send(channels.events.researchProgress, { hubId, ...progress });
+      },
+    });
+  });
+
+  // Memory Handlers
+  ipcMain.handle(channels.memory.list, async () => {
+    return repository.listUserMemories();
+  });
+
+  ipcMain.handle(channels.memory.add, async (_event, payload) => {
+    return repository.addUserMemory(payload);
+  });
+
+  ipcMain.handle(channels.memory.delete, async (_event, id) => {
+    const success = repository.deleteUserMemory(id);
+    return { success };
   });
 
   ipcMain.handle(channels.chat.createConversation, async (_event, title) => {
@@ -90,10 +197,6 @@ function registerIpcHandlers({ userDataPath }) {
     });
 
     conversation = repository.maybeAutoTitleConversation(conversation.id, content);
-    const history = repository.listMessages(conversation.id).map((message) => ({
-      role: message.role,
-      content: message.content,
-    }));
 
     let model = repository.getSetting('activeModel');
     if (!model) {
@@ -108,6 +211,128 @@ function registerIpcHandlers({ userDataPath }) {
       throw new Error('No Ollama models are available.');
     }
 
+    // Check Settings
+    const allSettings = repository.getAllSettings();
+    const isWebSearchEnabled =
+      payload.webSearchOverride ?? (allSettings.webSearchEnabled === 'true');
+
+    let webSearchContext = '';
+    const citations = [];
+
+    // 1. Perform Web Search & Scraping if enabled
+    if (isWebSearchEnabled) {
+      try {
+        const searchResults = await performWebSearch({
+          query: content,
+          provider: allSettings.searchProvider,
+          options: {
+            searxngUrl: allSettings.searxngUrl,
+            tavilyApiKey: allSettings.tavilyApiKey,
+            braveApiKey: allSettings.braveApiKey,
+            maxResults: 4,
+          },
+        });
+
+        if (searchResults && searchResults.length > 0) {
+          const scraped = await scrapeTopResults(searchResults, 3);
+          const contextParts = [];
+
+          scraped.forEach((item, index) => {
+            const citeId = index + 1;
+            try {
+              const urlObj = new URL(item.url);
+              citations.push({
+                id: citeId,
+                title: item.title,
+                url: item.url,
+                snippet: item.snippet,
+                domain: urlObj.hostname.replace(/^www\./, ''),
+              });
+            } catch (_e) {
+              citations.push({
+                id: citeId,
+                title: item.title,
+                url: item.url,
+                snippet: item.snippet,
+                domain: item.url,
+              });
+            }
+
+            contextParts.push(
+              `[Source ${citeId}]: ${item.title} (${item.url})\n"${item.content.slice(0, 1200)}"`,
+            );
+          });
+
+          webSearchContext = `\n\n<web_context>\n[REAL-TIME INTERNET SEARCH RESULTS]\nUse the web search results below to ensure complete accuracy and freshness. Cite your sources using bracketed numbers like [1], [2] matching the source numbers.\n\n${contextParts.join('\n\n')}\n</web_context>\n`;
+        }
+      } catch (searchErr) {
+        console.error('Web Search Error:', searchErr.message);
+      }
+    }
+
+    // 2. Retrieve Contextual Memory (Facts + Vector RAG + Rolling Summary)
+    let memoryContext = '';
+    try {
+      memoryContext = await memoryManager.retrieveContext({
+        query: content,
+        currentConversationId: conversation.id,
+        model,
+      });
+    } catch (memErr) {
+      console.error('Memory Retrieval Error:', memErr.message);
+    }
+
+    // 3. Retrieve User Profile & Custom System Instructions
+    const userProfile = repository.getUserProfile();
+    const profileContext = `\n[USER PROFILE & SYSTEM PREFERENCES]\n- User Name: ${userProfile.name}\n- User Role: ${userProfile.role}\n- Tech Stack: ${userProfile.stack}\n- Preferred Response Tone: ${userProfile.tone}\n- Global System Instructions: ${userProfile.instructions}\n`;
+
+    // 4. Retrieve Specialist RAG Context if an Active Specialist Hub is selected
+    let specialistContext = '';
+    if (payload.activeSpecialistId) {
+      try {
+        const hub = repository.getSpecialistHub(payload.activeSpecialistId);
+        if (hub) {
+          let specialistRag = '';
+          const queryEmbedding = await ollama.generateEmbedding({ model, input: content });
+          if (queryEmbedding && queryEmbedding.length > 0) {
+            const matches = repository.searchSpecialistVectorMemory(hub.id, queryEmbedding, 4);
+            if (matches && matches.length > 0) {
+              const chunkLines = matches.map(
+                (m) => `[Source (${m.sourceTitle})]: "${m.chunkText}"`,
+              );
+              specialistRag = `\n[SPECIALIST KNOWLEDGE VAULT: ${hub.name}]\n${chunkLines.join('\n\n')}`;
+            }
+          }
+
+          specialistContext = `\n<specialist_role>\nYou are currently operating as an AI Specialist: ${hub.name}.\n${hub.description ? `Description: ${hub.description}\n` : ''}${hub.systemPrompt ? `Expert Instructions: ${hub.systemPrompt}\n` : ''}${specialistRag}\n</specialist_role>\n`;
+        }
+      } catch (specErr) {
+        console.error('Specialist RAG Error:', specErr.message);
+      }
+    }
+
+    // 5. Construct Final Prompt History with Injected Context
+    const rawHistory = repository.listMessages(conversation.id).map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+
+    // Build system message with profile, specialist, memory & search context
+    const systemContent = [
+      'You are Sidekick, an accurate, grounded, and helpful AI desktop assistant.',
+      profileContext,
+      specialistContext,
+      memoryContext,
+      webSearchContext,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
+    const formattedMessages = [
+      { role: 'system', content: systemContent },
+      ...rawHistory,
+    ];
+
     const requestId = randomUUID();
     const abortController = new AbortController();
     activeGenerations.set(requestId, abortController);
@@ -116,13 +341,14 @@ function registerIpcHandlers({ userDataPath }) {
       .then(async () => {
         const assistantText = await ollama.generateChat({
           model,
-          messages: history,
+          messages: formattedMessages,
           signal: abortController.signal,
           onChunk: (_delta, fullText) => {
             event.sender.send(channels.events.streamUpdate, {
               requestId,
               conversationId: conversation.id,
               content: fullText,
+              citations,
             });
           },
         });
@@ -136,8 +362,34 @@ function registerIpcHandlers({ userDataPath }) {
         event.sender.send(channels.events.streamComplete, {
           requestId,
           conversationId: conversation.id,
-          message: assistantMessage,
+          message: {
+            ...assistantMessage,
+            citations: citations.length > 0 ? citations : undefined,
+          },
           conversation: repository.getConversationSummary(conversation.id),
+        });
+
+        // 4. Trigger Async Non-Blocking Background Memory Tasks
+        Promise.allSettled([
+          memoryManager.maybeUpdateRollingSummary({
+            conversationId: conversation.id,
+            messages: rawHistory,
+            model,
+          }),
+          memoryManager.extractAndSaveFacts({
+            conversationId: conversation.id,
+            userMessage: content,
+            assistantMessage: assistantText,
+            model,
+          }),
+          memoryManager.indexMessageEmbedding({
+            messageId: userMessage.id,
+            conversationId: conversation.id,
+            content,
+            model,
+          }),
+        ]).catch(() => {
+          // Ignore background task errors
         });
       })
       .catch((error) => {
@@ -204,9 +456,11 @@ function registerIpcHandlers({ userDataPath }) {
 
   return {
     repository,
+    memoryManager,
   };
 }
 
 module.exports = {
   registerIpcHandlers,
 };
+
