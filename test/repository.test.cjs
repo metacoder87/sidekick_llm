@@ -61,3 +61,57 @@ test('repository searches conversations by title and message content', () => {
 
   repository.close();
 });
+
+test('repository stores and retrieves user memories and settings', () => {
+  const repository = new ConversationRepository(':memory:');
+
+  // Test Settings
+  repository.setSetting('webSearchEnabled', 'true');
+  assert.equal(repository.getSetting('webSearchEnabled'), 'true');
+  const allSettings = repository.getAllSettings();
+  assert.equal(allSettings.webSearchEnabled, 'true');
+
+  // Test User Memories
+  const memory = repository.addUserMemory({
+    fact: 'User prefers React with Vite',
+    category: 'tech-stack',
+  });
+  assert.ok(memory.id);
+  assert.equal(memory.fact, 'User prefers React with Vite');
+
+  const memories = repository.listUserMemories();
+  assert.equal(memories.length, 1);
+  assert.equal(memories[0].fact, 'User prefers React with Vite');
+
+  const deleted = repository.deleteUserMemory(memory.id);
+  assert.equal(deleted, true);
+  assert.equal(repository.listUserMemories().length, 0);
+
+  repository.close();
+});
+
+test('repository saves message vector embeddings and performs cosine search', () => {
+  const repository = new ConversationRepository(':memory:');
+  const conv = repository.createConversation('Vector Test');
+
+  repository.saveMessageEmbedding({
+    messageId: 'msg-1',
+    conversationId: conv.id,
+    chunkText: 'React components and hooks performance optimization',
+    embedding: [1, 0, 0, 0],
+  });
+
+  repository.saveMessageEmbedding({
+    messageId: 'msg-2',
+    conversationId: conv.id,
+    chunkText: 'Database indexing with SQLite WAL mode',
+    embedding: [0, 1, 0, 0],
+  });
+
+  const matches = repository.searchVectorMemory([0.9, 0.1, 0, 0], 5);
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].chunkText, 'React components and hooks performance optimization');
+
+  repository.close();
+});
+

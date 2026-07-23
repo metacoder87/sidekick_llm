@@ -114,9 +114,55 @@ class OllamaService {
 
     return fullText.trim();
   }
+
+  async generateChatSync({ model, messages }) {
+    const response = await fetch(`${this.baseUrl()}/api/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: false,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama returned ${response.status}.`);
+    }
+
+    const payload = await response.json();
+    return payload.message?.content || '';
+  }
+
+  async generateEmbedding({ model, input }) {
+    try {
+      const response = await fetch(`${this.baseUrl()}/api/embeddings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          prompt: input,
+        }),
+      });
+
+      if (!response.ok) {
+        return null;
+      }
+
+      const payload = await response.json();
+      return payload.embedding || null;
+    } catch (_error) {
+      return null;
+    }
+  }
 }
 
 module.exports = {
   OllamaService,
   normalizeBaseUrl,
 };
+
