@@ -1,8 +1,11 @@
 import { useState } from 'react';
+import WebSearchToggle from './WebSearchToggle';
 
 export default function Composer({
   disabled,
   isStreaming,
+  webSearchEnabled,
+  onToggleWebSearch,
   onSend,
   onCancel,
 }) {
@@ -35,7 +38,14 @@ export default function Composer({
       />
 
       <div className="composer__actions">
-        <p>Enter to send. Shift+Enter for a new line.</p>
+        <div className="composer__toolbar">
+          <WebSearchToggle
+            enabled={webSearchEnabled}
+            onToggle={onToggleWebSearch}
+            disabled={disabled}
+          />
+          <p>Enter to send. Shift+Enter for a new line.</p>
+        </div>
         <div>
           {isStreaming ? (
             <button type="button" className="secondary-button" onClick={onCancel}>

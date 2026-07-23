@@ -1,6 +1,4 @@
 import ConversationList from './ConversationList';
-import ModelSelect from './ModelSelect';
-import StatusPill from './StatusPill';
 
 export default function Sidebar({
   conversations,
@@ -12,32 +10,30 @@ export default function Sidebar({
   onRenameConversation,
   onDeleteConversation,
   onExportAll,
-  models,
-  activeModel,
-  onModelChange,
-  ollamaStatus,
-  disableModelSelection,
+  onOpenSettings,
+  onOpenSpecialistPicker,
+  activeSpecialistHub,
 }) {
   return (
     <aside className="sidebar">
       <div className="sidebar__brand">
         <div>
-          <p>Sidekick</p>
-          <h1>Local reasoning, saved cleanly.</h1>
+          <p>Sidekick LLM</p>
+          <h1>Offline Workspace</h1>
         </div>
         <button type="button" className="primary-button" onClick={onNewConversation}>
-          New chat
+          + New Chat
         </button>
       </div>
 
-      <StatusPill status={ollamaStatus} />
-
-      <ModelSelect
-        models={models}
-        activeModel={activeModel}
-        onChange={onModelChange}
-        disabled={disableModelSelection}
-      />
+      <div className="sidebar__actions-row">
+        <button type="button" className="secondary-button expert-picker-trigger" onClick={onOpenSpecialistPicker}>
+          ⚡ Experts {activeSpecialistHub ? `(${activeSpecialistHub.name})` : ''}
+        </button>
+        <button type="button" className="secondary-button" onClick={onOpenSettings} title="Settings & Memory Vault">
+          ⚙️ Settings
+        </button>
+      </div>
 
       <label className="search-field">
         <span>Search history</span>
@@ -57,9 +53,11 @@ export default function Sidebar({
         onDelete={onDeleteConversation}
       />
 
-      <button type="button" className="secondary-button" onClick={onExportAll}>
-        Export all history
-      </button>
+      <div className="sidebar__footer-actions">
+        <button type="button" className="ghost-button" onClick={onExportAll}>
+          Export History
+        </button>
+      </div>
     </aside>
   );
 }

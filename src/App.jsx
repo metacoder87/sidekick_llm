@@ -2,7 +2,11 @@ import { useDeferredValue, useEffect, useRef, useState } from 'react';
 
 import ChatView from './components/ChatView';
 import Composer from './components/Composer';
+import SettingsModal from './components/SettingsModal';
 import Sidebar from './components/Sidebar';
+import SpecialistModal from './components/SpecialistModal';
+import SpecialistPickerModal from './components/SpecialistPickerModal';
+import ThemeToggle from './components/ThemeToggle';
 
 function moveConversationToFront(items, conversation) {
   const rest = items.filter((item) => item.id !== conversation.id);
@@ -39,11 +43,35 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [streamRequestId, setStreamRequestId] = useState('');
   const [notice, setNotice] = useState('');
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [theme, setTheme] = useState('cyberpunk');
+
+  // Modals state
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isSpecialistPickerOpen, setIsSpecialistPickerOpen] = useState(false);
+  const [isSpecialistModalOpen, setIsSpecialistModalOpen] = useState(false);
+  const [specialistToEdit, setSpecialistToEdit] = useState(null);
+
+  // Active Specialist Hub
+  const [activeSpecialistId, setActiveSpecialistId] = useState(null);
+  const [activeSpecialistHub, setActiveSpecialistHub] = useState(null);
+
   const deferredSearch = useDeferredValue(searchQuery);
   const messagesRef = useRef(null);
 
   const activeConversationId = activeConversation?.id || null;
   const disableComposer = !sidekick || !ollamaStatus.available || !activeModel || !!streamRequestId;
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  async function handleToggleTheme(newTheme) {
+    setTheme(newTheme);
+    if (sidekick) {
+      await sidekick.settings.set('activeTheme', newTheme);
+    }
+  }
 
   async function refreshOllamaStatus() {
     if (!sidekick) {
@@ -51,15 +79,31 @@ export default function App() {
       return;
     }
 
-    const [status, listedModels, selectedModel] = await Promise.all([
+    const [status, listedModels, selectedModel, allSettings] = await Promise.all([
       sidekick.ollama.getStatus(),
       sidekick.models.list().catch(() => []),
       sidekick.models.getActive().catch(() => ''),
+      sidekick.settings.get().catch(() => ({})),
     ]);
 
     setOllamaStatus(status);
     setModels(listedModels);
     setActiveModel(selectedModel);
+    if (allSettings) {
+      if (allSettings.webSearchEnabled !== undefined) {
+        setWebSearchEnabled(allSettings.webSearchEnabled === 'true');
+      }
+      if (allSettings.activeTheme) {
+        setTheme(allSettings.activeTheme);
+      }
+    }
+  }
+
+  async function handleToggleWebSearch(enabled) {
+    setWebSearchEnabled(enabled);
+    if (sidekick) {
+      await sidekick.settings.set('webSearchEnabled', enabled ? 'true' : 'false');
+    }
   }
 
   async function refreshConversationList(query = '') {
@@ -135,9 +179,7 @@ export default function App() {
     }
 
     const updateTimer = setInterval(() => {
-      refreshOllamaStatus().catch(() => {
-        // Ignore polling errors; status view handles unavailable Ollama.
-      });
+      refreshOllamaStatus().catch(() => {});
     }, 15000);
 
     return () => clearInterval(updateTimer);
@@ -167,6 +209,7 @@ export default function App() {
             id: `stream:${payload.requestId}`,
             role: 'assistant',
             content: payload.content,
+            citations: payload.citations,
             createdAt: new Date().toISOString(),
             status: 'streaming',
           }),
@@ -283,6 +326,16 @@ export default function App() {
     setActiveModel(modelName);
   }
 
+  async function handleSelectSpecialist(hubId) {
+    setActiveSpecialistId(hubId);
+    if (!hubId) {
+      setActiveSpecialistHub(null);
+    } else if (sidekick) {
+      const hub = await sidekick.specialist.list().then((list) => list.find((h) => h.id === hubId));
+      setActiveSpecialistHub(hub || null);
+    }
+  }
+
   async function handleSendMessage(content) {
     if (!sidekick) {
       return;
@@ -291,6 +344,8 @@ export default function App() {
     const result = await sidekick.chat.sendMessageStream({
       conversationId: activeConversationId,
       content,
+      webSearchOverride: webSearchEnabled,
+      activeSpecialistId,
     });
 
     setStreamRequestId(result.requestId);
@@ -346,13 +401,13 @@ export default function App() {
     }
   }
 
-  let headerCopy = 'All history is stored locally in the app database.';
+  let headerCopy = 'All history is stored locally in SQLite.';
   if (notice) {
     headerCopy = notice;
   } else if (!ollamaStatus.available) {
-    headerCopy = 'Start Ollama and load a model to begin streaming responses.';
+    headerCopy = 'Start Ollama to begin local inference.';
   } else if (!activeModel) {
-    headerCopy = 'Select an available Ollama model.';
+    headerCopy = 'Select an available model in Settings.';
   }
 
   return (
@@ -367,23 +422,27 @@ export default function App() {
         onRenameConversation={handleRenameConversation}
         onDeleteConversation={handleDeleteConversation}
         onExportAll={handleExportAll}
-        models={models}
-        activeModel={activeModel}
-        onModelChange={handleModelChange}
-        ollamaStatus={ollamaStatus}
-        disableModelSelection={!!streamRequestId}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSpecialistPicker={() => setIsSpecialistPickerOpen(true)}
+        activeSpecialistHub={activeSpecialistHub}
       />
 
       <section className="workspace">
         <header className="workspace__banner">
-          <p>Session</p>
-          <h2>{headerCopy}</h2>
+          <div>
+            <p>Session</p>
+            <h2>{headerCopy}</h2>
+          </div>
+          <div className="workspace__banner-right">
+            <ThemeToggle theme={theme} onToggle={handleToggleTheme} />
+          </div>
         </header>
 
         <div className="workspace__chat" ref={messagesRef}>
           <ChatView
             conversation={activeConversation}
             streamRequestId={streamRequestId}
+            activeSpecialist={activeSpecialistHub}
             onExportConversation={handleExportConversation}
           />
         </div>
@@ -391,10 +450,53 @@ export default function App() {
         <Composer
           disabled={disableComposer}
           isStreaming={!!streamRequestId}
+          webSearchEnabled={webSearchEnabled}
+          onToggleWebSearch={handleToggleWebSearch}
           onSend={handleSendMessage}
           onCancel={handleCancelGeneration}
         />
       </section>
+
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        sidekick={sidekick}
+        models={models}
+        activeModel={activeModel}
+        onModelChange={handleModelChange}
+        ollamaStatus={ollamaStatus}
+        webSearchEnabled={webSearchEnabled}
+        onToggleWebSearch={handleToggleWebSearch}
+      />
+
+      <SpecialistPickerModal
+        isOpen={isSpecialistPickerOpen}
+        onClose={() => setIsSpecialistPickerOpen(false)}
+        sidekick={sidekick}
+        activeSpecialistId={activeSpecialistId}
+        onSelectSpecialist={handleSelectSpecialist}
+        onOpenCreateModal={() => {
+          setSpecialistToEdit(null);
+          setIsSpecialistModalOpen(true);
+        }}
+        onOpenEditModal={(hub) => {
+          setSpecialistToEdit(hub);
+          setIsSpecialistModalOpen(true);
+        }}
+      />
+
+      <SpecialistModal
+        key={specialistToEdit?.id || 'new'}
+        isOpen={isSpecialistModalOpen}
+        onClose={() => setIsSpecialistModalOpen(false)}
+        sidekick={sidekick}
+        hubToEdit={specialistToEdit}
+        onHubSaved={(saved) => {
+          if (activeSpecialistId === saved.id) {
+            setActiveSpecialistHub(saved);
+          }
+        }}
+      />
     </main>
   );
 }
