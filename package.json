@@ -9,13 +9,14 @@
     "build": "vite build",
     "preview": "cross-env PREVIEW=true electron .",
     "test": "npm run test:node && npm run test:electron",
-    "test:node": "node --test --experimental-test-isolation=none test/ollama.test.cjs",
-    "test:electron": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test --experimental-test-isolation=none test/repository.test.cjs",
+    "test:node": "node --test --experimental-test-isolation=none test/ollama.test.cjs test/search_memory.test.cjs",
+    "test:electron": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test --experimental-test-isolation=none test/repository.test.cjs test/profile_specialist.test.cjs",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "postinstall": "npm run rebuild:native"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",
+    "pdf-parse": "^2.4.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
