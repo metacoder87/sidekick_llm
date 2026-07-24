@@ -339,25 +339,34 @@ Electron's `file://` loader resolves to the filesystem root. Set `base:'./'`; ve
 the built page mounts under `file://`. Dev mode had masked this; it would have blocked
 Stage 4 packaging.
 
-#### Phase 3 — Honest reporting (kills silent-success permanently)
-- [ ] Worker returns `{chunksAttempted, chunksIndexed, chunksFailed,
-      embeddingModel, failureReason}` — never `{success:true}`.
-- [ ] IPC pre-flights the embedding model *before* scraping; fail fast with an
-      actionable message if missing/unsupported.
-- [ ] `getSpecialistHub` returns `chunkCount` AND `retrievableChunkCount`
-      (matching current model+dim). UI warns when they diverge.
-- [ ] `SpecialistModal` shows real counts (*"Indexed 47/52 (5 failed)"*), stops
-      the `res.message || '✅'` lie ([`:68,105,169`](src/components/SpecialistModal.jsx)).
-- [ ] Chat path: Specialist active but 0 chunks retrieved → visible badge so an
-      unsourced answer is never mistaken for a grounded one (invariant #1).
+#### Phase 3 — Honest reporting ✅ DONE (commit adds `feat(specialists)`)
+- [x] Ingest/research workers return real counts (`chunksCount`/`chunksFailed`,
+      `totalChunks`/`totalFailed`) and `{success:false, reason}` on failure — never
+      a bare `{success:true}`.
+- [x] `Ollama.checkEmbedding()` pre-flight; `research.start` + `ingestFile` fail
+      fast with an actionable reason before scraping/reading. **Verified live.**
+- [x] `getSpecialistHub` / `listSpecialistHubs` report `retrievableChunkCount`
+      (chunks embedded with the current model) alongside total `chunkCount`.
+- [x] `SpecialistModal` shows honest outcomes via `describeResult` (no
+      `res.message || '✅'`); shows "N of M retrievable"; warns on divergence.
+- [x] Chat path tags answers with `specialistGrounding`; `ChatView` badges an
+      answer as grounded (with source count) or flags it persona-only/unsourced
+      (invariant #1).
 
-#### Phase 4 — Re-index migration (recovers existing vaults; MUST follow Phase 1)
-- [ ] `specialist:reindex` channel: walk each hub, re-embed stored `chunk_text`
-      with the pinned model, write back correct model+dim. **Cheap — `chunk_text`
-      is already stored, no re-scrape/re-upload needed.** Repairs empty vectors in
-      the same pass.
-- [ ] `SpecialistModal` "Re-index Knowledge Vault" button, auto-prompted when
+#### Phase 4 — Re-index migration ✅ DONE (same commit)
+- [x] `specialist:reindex` channel + `DeepResearchWorker.reindexHub` re-embeds
+      stored `chunk_text` in place with the current model — cheap, no re-scrape/
+      re-upload. Retrieval filters by model+dim so repaired chunks become matchable.
+      **Verified live:** simulated legacy 4096-d vault (0 retrievable, 0 hits) →
+      re-indexed with real nomic-embed-text → retrievable, planted fact retrieved.
+- [x] `SpecialistModal` "🔧 Re-index Knowledge Vault" button, auto-shown when
       `retrievableChunkCount < chunkCount`.
+- **Note:** empty-vector rows can no longer exist (Phase 1 write boundary rejects
+  them), so re-index only repairs model/dim mismatches — exactly the legacy case.
+
+> **STAGE 1 COMPLETE.** Corpus is protected, portable, honestly reported, and its
+> knowledge is actually retrievable; existing vaults are recoverable. Test suite
+> 11 → 20. Remaining Stage-1-adjacent polish lives in Phase 5 below.
 
 #### Phase 5 — Provenance + citations surfaced (invariants #1, #2)
 - [ ] Add trust-tier + dates to chunk schema; capture at ingestion.
