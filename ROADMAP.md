@@ -405,7 +405,11 @@ quality is the ceiling on everything; this stage raises it.*
       concatenated), and a shared `RetrievalService` extraction.
 - [ ] **Hybrid retrieval.** Combine FTS5 BM25 (already exists, not wired to vaults)
       with vector similarity. Naive cosine-top-4 fails on the real questions.
-- [ ] **Reranking pass** over the merged candidate set (cross-encoder or LLM-scored).
+- [x] **Reranking pass (score-based v1).** Each vault yields deeper candidates
+      (top-8); a pure reranker (`electron/retrieval.cjs`) keeps the globally best few
+      across all consulted vaults by similarity score, and grounding is credited by
+      actual contribution. *Verified live on a 3-expert panel.* (Cross-encoder / LLM
+      reranking remains a possible future upgrade.)
 - [ ] **Query decomposition** for multi-hop ("does this lab relate to that med?").
 - [ ] **Aggregation queries** ("what does this Expert say about X overall?") — top-k
       chunks can't summarize a corpus; need map-reduce over the vault.
