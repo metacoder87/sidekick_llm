@@ -90,6 +90,19 @@ function MessageBubble({ message }) {
       {message.role === 'assistant' && message.citations ? (
         <CitationsList citations={message.citations} />
       ) : null}
+      {message.role === 'assistant' && message.specialistGrounding ? (
+        message.specialistGrounding.grounded ? (
+          <div className="grounding-badge grounding-badge--grounded">
+            ⚡ Grounded in {message.specialistGrounding.matches} source
+            {message.specialistGrounding.matches === 1 ? '' : 's'} from {message.specialistGrounding.name}
+          </div>
+        ) : (
+          <div className="grounding-badge grounding-badge--ungrounded">
+            ⚠️ {message.specialistGrounding.name} had no matching vault knowledge — this
+            answer is from the model, not cited sources.
+          </div>
+        )
+      ) : null}
     </article>
   );
 }

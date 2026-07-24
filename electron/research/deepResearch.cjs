@@ -214,6 +214,63 @@ class DeepResearchWorker {
 
     return { success: true, totalChunks, totalFailed };
   }
+
+  // Repair a vault by re-embedding every chunk that isn't already indexed with the
+  // current embedding model (legacy NULL-model rows, or rows from a prior model).
+  // Cheap because chunk_text is already stored — no re-scraping or re-upload needed
+  // (ROADMAP §5 Phase 4). Idempotent: a fully-indexed vault re-indexes 0 chunks.
+  async reindexHub({ hubId, embeddingModel, onProgress = () => {} }) {
+    const targets = this.repository.listChunksForReindex(hubId, embeddingModel);
+    if (targets.length === 0) {
+      onProgress({ status: 'complete', message: 'Vault is already fully indexed with the current embedding model.' });
+      return { success: true, reindexed: 0, failed: 0, total: 0 };
+    }
+
+    onProgress({
+      status: 'reindexing',
+      message: `Re-indexing ${targets.length} chunks with ${embeddingModel}...`,
+      total: targets.length,
+      current: 0,
+    });
+
+    let reindexed = 0;
+    let failed = 0;
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i];
+      let embedding = null;
+      try {
+        embedding = await this.ollama.generateEmbedding({ model: embeddingModel, input: target.chunkText });
+      } catch (_e) {
+        embedding = null;
+      }
+
+      if (!Array.isArray(embedding) || embedding.length === 0) {
+        failed++;
+      } else {
+        this.repository.updateChunkEmbedding(target.id, embedding, embeddingModel);
+        reindexed++;
+      }
+
+      onProgress({
+        status: 'reindexing',
+        message: `Re-indexed ${i + 1} of ${targets.length}...`,
+        total: targets.length,
+        current: i + 1,
+      });
+    }
+
+    if (reindexed === 0) {
+      const reason = `Could not re-embed any chunks — check that the embedding model "${embeddingModel}" is installed and supports embeddings.`;
+      onProgress({ status: 'error', message: reason });
+      return { success: false, reason, reindexed: 0, failed, total: targets.length };
+    }
+
+    onProgress({
+      status: 'complete',
+      message: `Re-indexed ${reindexed} chunks${failed ? ` (${failed} failed)` : ''}.`,
+    });
+    return { success: true, reindexed, failed, total: targets.length };
+  }
 }
 
 module.exports = {

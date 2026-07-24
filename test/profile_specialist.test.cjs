@@ -103,6 +103,60 @@ test('deepResearch chunkText splits large text into overlapping chunks', () => {
   assert.ok(chunks[0].includes('Alpha'));
 });
 
+test('specialist hub reports retrievable vs total chunk counts by current embedding model', () => {
+  const repository = new ConversationRepository(':memory:');
+  const model = repository.getSetting('embeddingModel'); // nomic-embed-text
+  const hub = repository.createSpecialistHub({ name: 'Counts' });
+
+  // One chunk from the current model, one from a stale/previous model.
+  repository.saveSpecialistChunk({ hubId: hub.id, sourceTitle: 'a', chunkText: 'current', embedding: [1, 2, 3], embeddingModel: model });
+  repository.saveSpecialistChunk({ hubId: hub.id, sourceTitle: 'b', chunkText: 'stale', embedding: [1, 2, 3, 4], embeddingModel: 'old-model' });
+
+  const got = repository.getSpecialistHub(hub.id);
+  assert.equal(got.chunkCount, 2);
+  assert.equal(got.retrievableChunkCount, 1);
+
+  // listSpecialistHubs reports the same split.
+  const listed = repository.listSpecialistHubs().find((h) => h.id === hub.id);
+  assert.equal(listed.chunkCount, 2);
+  assert.equal(listed.retrievableChunkCount, 1);
+
+  repository.close();
+});
+
+test('reindexHub re-embeds stale/legacy chunks so they become retrievable', async () => {
+  const repository = new ConversationRepository(':memory:');
+  const model = repository.getSetting('embeddingModel'); // nomic-embed-text
+  const hub = repository.createSpecialistHub({ name: 'Reindex' });
+
+  // A legacy chunk embedded by a different model at a different dimension.
+  repository.saveSpecialistChunk({ hubId: hub.id, sourceTitle: 'legacy', chunkText: 'reactor criticality data', embedding: [0.1, 0.2, 0.3, 0.4], embeddingModel: 'old-model' });
+  assert.equal(repository.getSpecialistHub(hub.id).retrievableChunkCount, 0);
+
+  // Stub embedder returns the current model's 768-d vectors.
+  const ollama = { generateEmbedding: async () => new Array(768).fill(0).map((_, i) => Math.sin(i)) };
+  const worker = new DeepResearchWorker({ repository, ollama });
+
+  const result = await worker.reindexHub({ hubId: hub.id, embeddingModel: model });
+  assert.equal(result.success, true);
+  assert.equal(result.reindexed, 1);
+  assert.equal(result.failed, 0);
+
+  // Now retrievable, and actually matchable with a current-model query.
+  assert.equal(repository.getSpecialistHub(hub.id).retrievableChunkCount, 1);
+  const q = new Array(768).fill(0).map((_, i) => Math.sin(i));
+  const hits = repository.searchSpecialistVectorMemory(hub.id, q, 4, model);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].sourceTitle, 'legacy');
+
+  // Idempotent: a second re-index has nothing to do.
+  const again = await worker.reindexHub({ hubId: hub.id, embeddingModel: model });
+  assert.equal(again.reindexed, 0);
+  assert.equal(again.total, 0);
+
+  repository.close();
+});
+
 test('deepResearch extracts text from a real PDF and indexes it (pdf-parse v2 API)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sk-pdf-'));
   try {

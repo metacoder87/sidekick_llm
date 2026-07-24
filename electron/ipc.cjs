@@ -93,6 +93,22 @@ function registerIpcHandlers({ userDataPath }) {
     return { success };
   });
 
+  ipcMain.handle(channels.specialist.reindex, async (event, { hubId }) => {
+    const embeddingModel = repository.getSetting('embeddingModel');
+    const preflight = await ollama.checkEmbedding(embeddingModel);
+    if (!preflight.ok) {
+      return { success: false, reason: preflight.reason };
+    }
+
+    return researchWorker.reindexHub({
+      hubId,
+      embeddingModel,
+      onProgress: (progress) => {
+        event.sender.send(channels.events.researchProgress, { hubId, ...progress });
+      },
+    });
+  });
+
   // Deep Research & Document Ingestion Handlers
   ipcMain.handle(channels.research.start, async (event, { hubId, topic, seedUrls, depth }) => {
     let model = repository.getSetting('activeModel');
@@ -103,13 +119,20 @@ function registerIpcHandlers({ userDataPath }) {
 
     const allSettings = repository.getAllSettings();
 
+    // Fail fast if embeddings won't work, before scraping the web for minutes.
+    const embeddingModel = repository.getSetting('embeddingModel');
+    const preflight = await ollama.checkEmbedding(embeddingModel);
+    if (!preflight.ok) {
+      return { success: false, reason: preflight.reason };
+    }
+
     return researchWorker.runWebDeepResearch({
       hubId,
       topic,
       seedUrls: seedUrls || [],
       depth: depth || 1,
       model,
-      embeddingModel: repository.getSetting('embeddingModel'),
+      embeddingModel,
       searchOptions: {
         provider: allSettings.searchProvider || 'duckduckgo',
         searxngUrl: allSettings.searxngUrl,
@@ -142,11 +165,18 @@ function registerIpcHandlers({ userDataPath }) {
       model = models[0]?.name || '';
     }
 
+    // Fail fast if embeddings won't work, before reading and chunking the file.
+    const embeddingModel = repository.getSetting('embeddingModel');
+    const preflight = await ollama.checkEmbedding(embeddingModel);
+    if (!preflight.ok) {
+      return { success: false, reason: preflight.reason };
+    }
+
     return researchWorker.ingestFilePath({
       hubId,
       filePath,
       model,
-      embeddingModel: repository.getSetting('embeddingModel'),
+      embeddingModel,
       onProgress: (progress) => {
         event.sender.send(channels.events.researchProgress, { hubId, ...progress });
       },
@@ -305,17 +335,23 @@ function registerIpcHandlers({ userDataPath }) {
     const userProfile = repository.getUserProfile();
     const profileContext = `\n[USER PROFILE & SYSTEM PREFERENCES]\n- User Name: ${userProfile.name}\n- User Role: ${userProfile.role}\n- Tech Stack: ${userProfile.stack}\n- Preferred Response Tone: ${userProfile.tone}\n- Global System Instructions: ${userProfile.instructions}\n`;
 
-    // 4. Retrieve Specialist RAG Context if an Active Specialist Hub is selected
+    // 4. Retrieve Specialist RAG Context if an Active Specialist Hub is selected.
+    //    Track grounding so the UI can flag an answer that came from the persona
+    //    alone, with no matching vault knowledge (invariant #1 — a persona speaking
+    //    from model weights must never look like a grounded, cited answer).
     let specialistContext = '';
+    let specialistGrounding = null;
     if (payload.activeSpecialistId) {
       try {
         const hub = repository.getSpecialistHub(payload.activeSpecialistId);
         if (hub) {
           let specialistRag = '';
+          let matchCount = 0;
           const queryEmbedding = await ollama.generateEmbedding({ model: embeddingModel, input: content });
           if (queryEmbedding && queryEmbedding.length > 0) {
-            const matches = repository.searchSpecialistVectorMemory(hub.id, queryEmbedding, 4);
+            const matches = repository.searchSpecialistVectorMemory(hub.id, queryEmbedding, 4, embeddingModel);
             if (matches && matches.length > 0) {
+              matchCount = matches.length;
               const chunkLines = matches.map(
                 (m) => `[Source (${m.sourceTitle})]: "${m.chunkText}"`,
               );
@@ -323,6 +359,7 @@ function registerIpcHandlers({ userDataPath }) {
             }
           }
 
+          specialistGrounding = { name: hub.name, grounded: matchCount > 0, matches: matchCount };
           specialistContext = `\n<specialist_role>\nYou are currently operating as an AI Specialist: ${hub.name}.\n${hub.description ? `Description: ${hub.description}\n` : ''}${hub.systemPrompt ? `Expert Instructions: ${hub.systemPrompt}\n` : ''}${specialistRag}\n</specialist_role>\n`;
         }
       } catch (specErr) {
@@ -384,6 +421,7 @@ function registerIpcHandlers({ userDataPath }) {
           message: {
             ...assistantMessage,
             citations: citations.length > 0 ? citations : undefined,
+            specialistGrounding: specialistGrounding || undefined,
           },
           conversation: repository.getConversationSummary(conversation.id),
         });

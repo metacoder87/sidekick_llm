@@ -41,7 +41,8 @@
     "get": "specialist:get",
     "create": "specialist:create",
     "update": "specialist:update",
-    "delete": "specialist:delete"
+    "delete": "specialist:delete",
+    "reindex": "specialist:reindex"
   },
   "research": {
     "start": "research:start",

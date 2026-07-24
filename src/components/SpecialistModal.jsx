@@ -1,5 +1,26 @@
 import { useEffect, useState } from 'react';
 
+// Turn a worker/IPC result into an honest status line. Never claims success for a
+// failed or zero-result operation (ROADMAP §5 Phase 3 — no silent success, no
+// `res.message || '✅'` lie).
+function describeResult(res) {
+  if (!res) return 'Done.';
+  if (res.success === false) {
+    if (res.cancelled) return '';
+    return `⚠️ ${res.reason || res.message || 'Operation did not complete.'}`;
+  }
+  if (typeof res.chunksCount === 'number') {
+    return `✅ Indexed ${res.chunksCount} chunks${res.chunksFailed ? ` (${res.chunksFailed} failed to embed)` : ''}.`;
+  }
+  if (typeof res.totalChunks === 'number') {
+    return `✅ Deep research indexed ${res.totalChunks} chunks${res.totalFailed ? ` (${res.totalFailed} failed to embed)` : ''}.`;
+  }
+  if (typeof res.reindexed === 'number') {
+    return `✅ Re-indexed ${res.reindexed} chunks${res.failed ? ` (${res.failed} failed)` : ''}.`;
+  }
+  return res.message || 'Done.';
+}
+
 export default function SpecialistModal({
   isOpen,
   onClose,
@@ -16,6 +37,41 @@ export default function SpecialistModal({
   const [statusMessage, setStatusMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [completed, setCompleted] = useState(false);
+  const [stats, setStats] = useState({
+    chunkCount: hubToEdit?.chunkCount || 0,
+    retrievableChunkCount: hubToEdit?.retrievableChunkCount ?? hubToEdit?.chunkCount ?? 0,
+  });
+
+  // Pull fresh counts for a hub after any vault-changing operation and reflect them
+  // in both this modal and the parent.
+  async function refreshHubStats(hubId) {
+    if (!sidekick || !hubId) return;
+    const updated = await sidekick.specialist.get(hubId).catch(() => null);
+    if (updated) {
+      setStats({
+        chunkCount: updated.chunkCount || 0,
+        retrievableChunkCount: updated.retrievableChunkCount ?? updated.chunkCount ?? 0,
+      });
+      onHubSaved(updated);
+    }
+  }
+
+  async function handleReindex() {
+    if (!sidekick || !hubToEdit?.id) return;
+    setLoading(true);
+    setStatusMessage('Re-indexing knowledge vault with the current embedding model...');
+    try {
+      const res = await sidekick.specialist.reindex(hubToEdit.id);
+      setStatusMessage(describeResult(res));
+      await refreshHubStats(hubToEdit.id);
+    } catch (err) {
+      setStatusMessage(`Error: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const staleCount = Math.max(0, stats.chunkCount - stats.retrievableChunkCount);
 
   useEffect(() => {
     if (sidekick?.events?.onResearchProgress) {
@@ -65,10 +121,9 @@ export default function SpecialistModal({
             hubId: savedHub.id,
             topic: researchTopic.trim(),
           });
-          setStatusMessage(res.message || '✅ Deep research complete!');
-          setCompleted(true);
-          const updated = await sidekick.specialist.get(savedHub.id).catch(() => null);
-          if (updated) onHubSaved(updated);
+          setStatusMessage(describeResult(res));
+          if (res.success !== false) setCompleted(true);
+          await refreshHubStats(savedHub.id);
         } catch (resErr) {
           setStatusMessage(`Research Warning: ${resErr.message}`);
         }
@@ -101,11 +156,10 @@ export default function SpecialistModal({
         });
         onHubSaved(createdHub);
         const res = await sidekick.research.ingestFile({ hubId: createdHub.id });
-        if (res.success) {
-          setStatusMessage(res.message || '✅ File ingested successfully!');
-          setCompleted(true);
-          const updated = await sidekick.specialist.get(createdHub.id).catch(() => null);
-          if (updated) onHubSaved(updated);
+        if (!res.cancelled) {
+          setStatusMessage(describeResult(res));
+          if (res.success) setCompleted(true);
+          await refreshHubStats(createdHub.id);
         }
       } catch (err) {
         setStatusMessage(`Error: ${err.message}`);
@@ -118,13 +172,10 @@ export default function SpecialistModal({
     setStatusMessage('Selecting document file...');
     try {
       const res = await sidekick.research.ingestFile({ hubId });
-      if (res.success) {
-        setStatusMessage(res.message || '✅ File ingested successfully!');
-        setCompleted(true);
-        const updated = await sidekick.specialist.get(hubId).catch(() => null);
-        if (updated) onHubSaved(updated);
-      } else if (!res.cancelled) {
-        setStatusMessage('Failed to ingest document.');
+      if (!res.cancelled) {
+        setStatusMessage(describeResult(res));
+        if (res.success) setCompleted(true);
+        await refreshHubStats(hubId);
       }
     } catch (err) {
       setStatusMessage(`Error: ${err.message}`);
@@ -166,11 +217,12 @@ export default function SpecialistModal({
         hubId: targetHubId,
         topic: researchTopic.trim(),
       });
-      setStatusMessage(res.message || '✅ Deep research complete!');
-      setCompleted(true);
-      setResearchTopic('');
-      const updated = await sidekick.specialist.get(targetHubId).catch(() => null);
-      if (updated) onHubSaved(updated);
+      setStatusMessage(describeResult(res));
+      if (res.success !== false) {
+        setCompleted(true);
+        setResearchTopic('');
+      }
+      await refreshHubStats(targetHubId);
     } catch (err) {
       setStatusMessage(`Research Error: ${err.message}`);
     } finally {
@@ -240,8 +292,26 @@ export default function SpecialistModal({
           <div className="specialist-vault-section">
             <h3>Knowledge Vault Training & Ingestion</h3>
             <p className="modal-description">
-              Provide a research topic or upload documents (PDF, TXT, MD) to train this AI Expert's RAG knowledge vault. {isEditing && hubToEdit.chunkCount ? `(${hubToEdit.chunkCount} vector chunks cached)` : ''}
+              Provide a research topic or upload documents (PDF, TXT, MD) to train this AI Expert's RAG knowledge vault. {isEditing && stats.chunkCount ? `(${stats.retrievableChunkCount} of ${stats.chunkCount} chunks retrievable with the current embedding model)` : ''}
             </p>
+
+            {isEditing && staleCount > 0 ? (
+              <div className="vault-warning">
+                <p>
+                  ⚠️ {staleCount} chunk{staleCount === 1 ? '' : 's'} were embedded with a
+                  different (or no) model and are not currently retrievable. Re-index to
+                  repair them — no re-upload needed.
+                </p>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={handleReindex}
+                  disabled={loading}
+                >
+                  🔧 Re-index Knowledge Vault
+                </button>
+              </div>
+            ) : null}
 
             <div className="vault-actions-grid">
               <div className="research-inline-form">

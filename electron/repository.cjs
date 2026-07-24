@@ -983,9 +983,19 @@ class ConversationRepository {
     return this.getUserProfile();
   }
 
-  // Specialist Hub Methods
+  // Specialist Hub Methods.
+  //
+  // Every hub reports two counts:
+  //   chunkCount            — total stored chunks
+  //   retrievableChunkCount — chunks embedded with the CURRENTLY configured
+  //                           embedding model, i.e. the ones retrieval can actually
+  //                           match. When these diverge, some chunks were embedded
+  //                           with a different (or no) model and are dead until
+  //                           re-indexed (Phase 4). The UI uses the gap to warn and
+  //                           to offer re-indexing (ROADMAP §5 Phase 3/4).
   listSpecialistHubs() {
-    const hubs = this.db
+    const embeddingModel = this.getSetting('embeddingModel');
+    return this.db
       .prepare(`
         SELECT
           h.id,
@@ -995,14 +1005,13 @@ class ConversationRepository {
           h.icon,
           h.created_at AS createdAt,
           h.updated_at AS updatedAt,
-          COUNT(c.id) AS chunkCount
+          (SELECT COUNT(*) FROM specialist_chunks sc WHERE sc.hub_id = h.id) AS chunkCount,
+          (SELECT COUNT(*) FROM specialist_chunks sc
+             WHERE sc.hub_id = h.id AND sc.embedding_model = @embeddingModel) AS retrievableChunkCount
         FROM specialist_hubs h
-        LEFT JOIN specialist_chunks c ON c.hub_id = h.id
-        GROUP BY h.id
         ORDER BY h.updated_at DESC
       `)
-      .all();
-    return hubs;
+      .all({ embeddingModel });
   }
 
   getSpecialistHub(id) {
@@ -1021,10 +1030,14 @@ class ConversationRepository {
       `)
       .get(id);
     if (!hub) return null;
+    const embeddingModel = this.getSetting('embeddingModel');
     const chunkCount = this.db
       .prepare(`SELECT COUNT(*) as count FROM specialist_chunks WHERE hub_id = ?`)
       .get(id).count;
-    return { ...hub, chunkCount };
+    const retrievableChunkCount = this.db
+      .prepare(`SELECT COUNT(*) as count FROM specialist_chunks WHERE hub_id = ? AND embedding_model = ?`)
+      .get(id, embeddingModel).count;
+    return { ...hub, chunkCount, retrievableChunkCount };
   }
 
   createSpecialistHub({ name, description = '', systemPrompt = '', icon = 'brain' }) {
@@ -1092,22 +1105,59 @@ class ConversationRepository {
       .run(timestamp, hubId);
   }
 
-  searchSpecialistVectorMemory(hubId, queryEmbedding, limit = 5) {
+  // Chunks that need re-embedding for the given (current) model: everything not
+  // already embedded with it — legacy NULL-model rows and rows from a previously
+  // configured model. Returns id + chunk_text so the worker can re-embed in place.
+  listChunksForReindex(hubId, embeddingModel) {
+    return this.db
+      .prepare(`
+        SELECT id, chunk_text AS chunkText
+        FROM specialist_chunks
+        WHERE hub_id = ?
+          AND (embedding_model IS NULL OR embedding_model != ?)
+        ORDER BY created_at ASC
+      `)
+      .all(hubId, embeddingModel);
+  }
+
+  // Overwrite a single chunk's vector in place (used by re-indexing). Enforces the
+  // same write-boundary contract as inserts (invariant #4).
+  updateChunkEmbedding(chunkId, embedding, embeddingModel) {
+    assertValidEmbedding(embedding);
+    this.db
+      .prepare(`
+        UPDATE specialist_chunks
+        SET embedding_json = ?, embedding_model = ?, embedding_dim = ?
+        WHERE id = ?
+      `)
+      .run(JSON.stringify(embedding), embeddingModel, embedding.length, chunkId);
+  }
+
+  searchSpecialistVectorMemory(hubId, queryEmbedding, limit = 5, embeddingModel = null) {
     if (!hubId || !queryEmbedding || !queryEmbedding.length) {
       return [];
     }
 
-    // Restrict to vectors of the same dimension as the query. Chunks embedded with
-    // a different model (or legacy NULL-dim chunks awaiting re-index) are excluded
-    // rather than silently scored 0 (invariant #4).
+    // Restrict to vectors of the same dimension as the query. When the embedding
+    // model is known, also require it to match: a chunk from a different model
+    // lives in a different vector space and its similarity would be meaningless
+    // even at the same dimension (invariant #4).
     const dim = queryEmbedding.length;
-    const rows = this.db
-      .prepare(`
-        SELECT hub_id, source_title, source_url, chunk_text, embedding_json
-        FROM specialist_chunks
-        WHERE hub_id = ? AND embedding_dim = ?
-      `)
-      .all(hubId, dim);
+    const rows = embeddingModel
+      ? this.db
+          .prepare(`
+            SELECT hub_id, source_title, source_url, chunk_text, embedding_json
+            FROM specialist_chunks
+            WHERE hub_id = ? AND embedding_dim = ? AND embedding_model = ?
+          `)
+          .all(hubId, dim, embeddingModel)
+      : this.db
+          .prepare(`
+            SELECT hub_id, source_title, source_url, chunk_text, embedding_json
+            FROM specialist_chunks
+            WHERE hub_id = ? AND embedding_dim = ?
+          `)
+          .all(hubId, dim);
 
     const scored = rows
       .map((row) => {
