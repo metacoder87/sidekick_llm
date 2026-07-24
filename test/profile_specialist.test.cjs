@@ -157,6 +157,40 @@ test('reindexHub re-embeds stale/legacy chunks so they become retrievable', asyn
   repository.close();
 });
 
+test('deriveSearchQueries extracts explicit quoted queries from a long research brief', async () => {
+  const worker = new DeepResearchWorker({ repository: {}, ollama: {} });
+  const brief = `Target Domain: Software Design Patterns and Clean Code.
+Execute deep research for enterprise patterns and refactoring.
+Seed queries:
+- "site:refactoring.guru software design patterns clean code"
+- "TypeScript enterprise architecture patterns and SOLID principles"
+- "Node.js asynchronous error handling best practices production"`;
+
+  const queries = await worker.deriveSearchQueries(brief, 'llama3:8b');
+
+  // The four-figure blob must NOT be searched verbatim; the quoted queries are used.
+  assert.ok(queries.length >= 2 && queries.length <= 5);
+  assert.ok(queries.some((q) => q.includes('refactoring.guru')));
+  assert.ok(queries.some((q) => /SOLID principles/i.test(q)));
+  assert.ok(queries.every((q) => q.length < 120));
+});
+
+test('deriveSearchQueries returns a short simple topic verbatim (no model call)', async () => {
+  // ollama has no generateChatSync — proves the short path never invokes the model.
+  const worker = new DeepResearchWorker({ repository: {}, ollama: {} });
+  const queries = await worker.deriveSearchQueries('photosynthesis basics', 'llama3:8b');
+  assert.deepEqual(queries, ['photosynthesis basics']);
+});
+
+test('deriveSearchQueries falls back to a heuristic first line when no quotes and no model', async () => {
+  const worker = new DeepResearchWorker({ repository: {}, ollama: {} });
+  const brief = 'Target Domain: Clean Architecture and decoupled service layers\nMore detail follows on the next lines that should be ignored.';
+  const queries = await worker.deriveSearchQueries(brief, null); // no model → heuristic
+  assert.equal(queries.length, 1);
+  assert.ok(/Clean Architecture/i.test(queries[0]));
+  assert.ok(!/Target Domain:/i.test(queries[0])); // label stripped
+});
+
 test('runWebDeepResearch reports an honest failure when search finds no sources', async () => {
   const saved = [];
   const repository = { saveSpecialistChunk: (c) => saved.push(c) };

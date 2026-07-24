@@ -4,6 +4,19 @@ const { PDFParse } = require('pdf-parse');
 const { scrapePage } = require('../search/scraper.cjs');
 const { performWebSearch } = require('../search/searchService.cjs');
 
+function dedupeStrings(items) {
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
+    const key = item.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(item);
+    }
+  }
+  return out;
+}
+
 function chunkText(text, chunkSize = 800, overlap = 150) {
   if (!text) return [];
   const clean = text.replace(/\s+/g, ' ').trim();
@@ -125,6 +138,56 @@ class DeepResearchWorker {
     return { success: true, chunksCount: indexed, chunksFailed: failed };
   }
 
+  // Turn a topic — which may be a short phrase OR a long multi-paragraph research
+  // brief — into concrete web search queries. Search engines return nothing for a
+  // 1000-character blob, so "Deep Research" must decompose it (ROADMAP §5 Phase 2 /
+  // Stage 2 retrieval). Priority: explicit quoted queries the user wrote → the raw
+  // topic if it is already short → LLM-generated queries → a heuristic first line.
+  async deriveSearchQueries(topic, model) {
+    const trimmed = (topic || '').trim();
+    if (!trimmed) return [];
+
+    // 1. Explicit "quoted" search queries embedded in the brief win outright.
+    const quoted = [...trimmed.matchAll(/"([^"]{3,200})"/g)].map((m) => m[1].trim()).filter(Boolean);
+    if (quoted.length > 0) return dedupeStrings(quoted).slice(0, 5);
+
+    // 2. Already a simple query — use it verbatim.
+    if (trimmed.length <= 120 && !trimmed.includes('\n')) return [trimmed];
+
+    // 3. Ask the chat model to decompose the brief into concise queries.
+    if (model && typeof this.ollama.generateChatSync === 'function') {
+      try {
+        const out = await this.ollama.generateChatSync({
+          model,
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You convert a research brief into web search queries. Output ONLY a JSON array of 3 to 5 short query strings (each under 12 words, no quotes, no site: operators unless essential). No prose, no explanation.',
+            },
+            { role: 'user', content: trimmed.slice(0, 2000) },
+          ],
+        });
+        const match = out && out.match(/\[[\s\S]*\]/);
+        if (match) {
+          const arr = JSON.parse(match[0]);
+          if (Array.isArray(arr)) {
+            const queries = dedupeStrings(arr.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()));
+            if (queries.length > 0) return queries.slice(0, 5);
+          }
+        }
+      } catch (_e) {
+        // Fall through to the heuristic.
+      }
+    }
+
+    // 4. Heuristic last resort: first non-empty line, drop a leading "Label:" prefix,
+    //    cap to a searchable length.
+    const firstLine = trimmed.split('\n').map((s) => s.trim()).find(Boolean) || trimmed;
+    const noLabel = firstLine.replace(/^[^:]{0,40}:\s*/, '');
+    return [noLabel.split(/\s+/).slice(0, 12).join(' ')];
+  }
+
   async runWebDeepResearch({ hubId, topic, seedUrls = [], depth = 1, model, embeddingModel, searchOptions = {}, onProgress = () => {} }) {
     const embedModel = embeddingModel || model;
     onProgress({ status: 'searching', message: `Searching the web for "${topic}"...` });
@@ -158,35 +221,48 @@ class DeepResearchWorker {
       const formatted = /^https?:\/\//i.test(trimmedTopic) ? trimmedTopic : `https://${trimmedTopic}`;
       if (!targetUrls.includes(formatted)) targetUrls.push(formatted);
     } else if (trimmedTopic) {
-      // Route through performWebSearch so the user's configured provider is honored
-      // and the built-in fallback chain (DuckDuckGo → Wikipedia) applies.
-      const searchResults = await this.search({
-        query: trimmedTopic,
-        provider: searchOptions.provider || 'duckduckgo',
-        options: {
-          searxngUrl: searchOptions.searxngUrl,
-          tavilyApiKey: searchOptions.tavilyApiKey,
-          braveApiKey: searchOptions.braveApiKey,
-          maxResults: 6,
-        },
+      // Decompose the topic/brief into concrete queries, then search each. Routes
+      // through performWebSearch so the configured provider + fallback chain apply.
+      const queries = await this.deriveSearchQueries(trimmedTopic, model);
+      onProgress({
+        status: 'searching',
+        message: `Running ${queries.length} search ${queries.length === 1 ? 'query' : 'queries'} derived from your topic...`,
       });
 
-      for (const res of searchResults) {
-        if (res.url && !targetUrls.includes(res.url)) targetUrls.push(res.url);
-        // Index the result snippet directly. This guarantees the run yields
-        // knowledge even if every page later fails to scrape (unreachable/blocked).
-        if (res.snippet && res.snippet.length > 40) {
-          await indexChunk({
-            sourceTitle: `Snippet: ${res.title || res.url}`,
-            sourceUrl: res.url,
-            chunkText: `${res.title}\n${res.snippet}`,
-          });
+      const seenUrls = new Set(targetUrls);
+      const MAX_SOURCES = 10;
+      for (const query of queries) {
+        if (targetUrls.length >= MAX_SOURCES) break;
+        const searchResults = await this.search({
+          query,
+          provider: searchOptions.provider || 'duckduckgo',
+          options: {
+            searxngUrl: searchOptions.searxngUrl,
+            tavilyApiKey: searchOptions.tavilyApiKey,
+            braveApiKey: searchOptions.braveApiKey,
+            maxResults: 5,
+          },
+        });
+
+        for (const res of searchResults) {
+          if (!res.url || seenUrls.has(res.url)) continue;
+          seenUrls.add(res.url);
+          if (targetUrls.length < MAX_SOURCES) targetUrls.push(res.url);
+          // Index the result snippet directly, once per URL. This guarantees the
+          // run yields knowledge even if the page later fails to scrape.
+          if (res.snippet && res.snippet.length > 40) {
+            await indexChunk({
+              sourceTitle: `Snippet: ${res.title || res.url}`,
+              sourceUrl: res.url,
+              chunkText: `${res.title}\n${res.snippet}`,
+            });
+          }
         }
       }
 
       // No sources at all — a distinct, actionable failure (not an embedding issue).
       if (targetUrls.length === 0) {
-        const reason = `Web search returned no sources for "${trimmedTopic}". Try different keywords, paste a direct URL as the topic, or configure a search provider (Tavily/Brave) in Settings → Web Search.`;
+        const reason = `Web search returned no sources for the derived queries (${queries.map((q) => `"${q}"`).join(', ')}). Try simpler keywords, paste a direct URL as the topic, or configure a search provider (Tavily/Brave) in Settings → Web Search.`;
         onProgress({ status: 'error', message: reason });
         return { success: false, reason, totalChunks: 0, totalFailed };
       }
