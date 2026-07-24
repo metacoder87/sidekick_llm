@@ -23,6 +23,10 @@ const DEFAULT_SETTINGS = {
   // the chat model never changes vector dimensions and orphans the vault
   // (ROADMAP §3 invariant #5). nomic-embed-text is 768-d and purpose-built.
   embeddingModel: 'nomic-embed-text',
+  // Optional fast model for background/utility work (summaries, fact extraction,
+  // research query generation). Empty = use the active chat model. Lets a user chat
+  // with a large model while cheap background tasks run on a small one (invariant #5).
+  backgroundModel: '',
 };
 
 const DEFAULT_PROFILE = {

@@ -131,7 +131,8 @@ function registerIpcHandlers({ userDataPath }) {
       topic,
       seedUrls: seedUrls || [],
       depth: depth || 1,
-      model,
+      // Query decomposition is utility work — use the background model if set.
+      model: repository.getSetting('backgroundModel') || model,
       embeddingModel,
       searchOptions: {
         provider: allSettings.searchProvider || 'duckduckgo',
@@ -258,6 +259,9 @@ function registerIpcHandlers({ userDataPath }) {
     // Embeddings use the dedicated embedding model regardless of the chat model,
     // so vector dimensions stay stable across chat-model switches (invariant #5).
     const embeddingModel = repository.getSetting('embeddingModel');
+    // Background/utility LLM work (summaries, fact extraction) runs on the optional
+    // background model, falling back to the chat model when none is configured.
+    const backgroundModel = repository.getSetting('backgroundModel') || model;
 
     // Check Settings
     const allSettings = repository.getAllSettings();
@@ -452,18 +456,19 @@ function registerIpcHandlers({ userDataPath }) {
           conversation: repository.getConversationSummary(conversation.id),
         });
 
-        // 4. Trigger Async Non-Blocking Background Memory Tasks
+        // 4. Trigger Async Non-Blocking Background Memory Tasks. Summarization and
+        //    fact extraction are utility work → run on the background model.
         Promise.allSettled([
           memoryManager.maybeUpdateRollingSummary({
             conversationId: conversation.id,
             messages: rawHistory,
-            model,
+            model: backgroundModel,
           }),
           memoryManager.extractAndSaveFacts({
             conversationId: conversation.id,
             userMessage: content,
             assistantMessage: assistantText,
-            model,
+            model: backgroundModel,
           }),
           memoryManager.indexMessageEmbedding({
             messageId: userMessage.id,

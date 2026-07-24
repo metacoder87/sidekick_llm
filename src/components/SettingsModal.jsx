@@ -33,6 +33,9 @@ export default function SettingsModal({
   const [tavilyApiKey, setTavilyApiKey] = useState('');
   const [braveApiKey, setBraveApiKey] = useState('');
 
+  // Optional fast model for background/utility work ('' = same as chat model).
+  const [backgroundModel, setBackgroundModel] = useState('');
+
   const [saving, setSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
 
@@ -56,6 +59,7 @@ export default function SettingsModal({
           setSearxngUrl(allSettings.searxngUrl || '');
           setTavilyApiKey(allSettings.tavilyApiKey || '');
           setBraveApiKey(allSettings.braveApiKey || '');
+          setBackgroundModel(allSettings.backgroundModel || '');
         }
       }).catch(() => {});
 
@@ -311,8 +315,30 @@ export default function SettingsModal({
                 </select>
               </label>
 
+              <label className="form-field">
+                <span>Background / Utility Model</span>
+                <select
+                  value={backgroundModel}
+                  onChange={async (e) => {
+                    const value = e.target.value;
+                    setBackgroundModel(value);
+                    if (sidekick) await sidekick.settings.set('backgroundModel', value);
+                  }}
+                >
+                  <option value="">Same as chat model</option>
+                  {models.map((model) => (
+                    <option key={model.name} value={model.name}>
+                      {model.name} {model.size ? `(${Math.round(model.size / 1e9)}GB)` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
               <p className="modal-description">
                 Available models are retrieved directly from your local Ollama instance (`ollama list`).
+                The background model handles summaries, fact extraction, and research query
+                generation — pick a small, fast model here to keep chat responsive while you
+                converse with a larger one.
               </p>
             </div>
           )}
