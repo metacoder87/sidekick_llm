@@ -27,7 +27,10 @@ class DeepResearchWorker {
     this.ollama = ollama;
   }
 
-  async ingestFilePath({ hubId, filePath, model, onProgress = () => {} }) {
+  async ingestFilePath({ hubId, filePath, model, embeddingModel, onProgress = () => {} }) {
+    // Embeddings always use the dedicated embedding model, never the chat model
+    // (ROADMAP §3 invariant #5). Fall back to `model` for older callers/tests.
+    const embedModel = embeddingModel || model;
     const ext = path.extname(filePath).toLowerCase();
     let title = path.basename(filePath);
     let fullText = '';
@@ -69,37 +72,59 @@ class DeepResearchWorker {
       current: 0,
     });
 
-    let count = 0;
-    for (const chunk of chunks) {
-      count++;
+    let indexed = 0;
+    let failed = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
       let embedding = null;
       try {
-        embedding = await this.ollama.generateEmbedding({ model, input: chunk });
+        embedding = await this.ollama.generateEmbedding({ model: embedModel, input: chunk });
       } catch (_e) {
-        // Fallback null embedding
+        embedding = null;
       }
 
-      this.repository.saveSpecialistChunk({
-        hubId,
-        sourceTitle: title,
-        sourceUrl: `file://${filePath.replace(/\\/g, '/')}`,
-        chunkText: chunk,
-        embedding: embedding || [],
-      });
+      // A chunk without a valid embedding is unretrievable — skip and count it as
+      // failed rather than storing a dead row (the repository write boundary would
+      // reject it anyway). ROADMAP §5 Phase 1/3 — no silent success.
+      if (!Array.isArray(embedding) || embedding.length === 0) {
+        failed++;
+      } else {
+        this.repository.saveSpecialistChunk({
+          hubId,
+          sourceTitle: title,
+          sourceUrl: `file://${filePath.replace(/\\/g, '/')}`,
+          chunkText: chunk,
+          embedding,
+          embeddingModel: embedModel,
+        });
+        indexed++;
+      }
 
       onProgress({
         status: 'embedding',
-        message: `Indexed chunk ${count} of ${chunks.length}...`,
+        message: `Indexed chunk ${i + 1} of ${chunks.length}...`,
         total: chunks.length,
-        current: count,
+        current: i + 1,
       });
     }
 
-    onProgress({ status: 'complete', message: `Successfully ingested ${title} (${count} chunks)!` });
-    return { success: true, chunksCount: count };
+    // If embeddings were required but none succeeded, the ingest failed even though
+    // text was extracted — report it honestly instead of claiming success.
+    if (indexed === 0) {
+      const reason = `Extracted ${chunks.length} chunks but could not embed any — check that the embedding model "${embedModel}" is installed and supports embeddings.`;
+      onProgress({ status: 'error', message: reason });
+      return { success: false, reason, chunksCount: 0, chunksFailed: failed };
+    }
+
+    onProgress({
+      status: 'complete',
+      message: `Ingested ${title}: indexed ${indexed} chunks${failed ? ` (${failed} failed to embed)` : ''}.`,
+    });
+    return { success: true, chunksCount: indexed, chunksFailed: failed };
   }
 
-  async runWebDeepResearch({ hubId, topic, seedUrls = [], depth = 1, model, onProgress = () => {} }) {
+  async runWebDeepResearch({ hubId, topic, seedUrls = [], depth = 1, model, embeddingModel, onProgress = () => {} }) {
+    const embedModel = embeddingModel || model;
     onProgress({ status: 'searching', message: `Initializing research for "${topic}"...` });
 
     let targetUrls = [...seedUrls];
@@ -125,6 +150,7 @@ class DeepResearchWorker {
     });
 
     let totalChunks = 0;
+    let totalFailed = 0;
     let urlIndex = 0;
 
     for (const url of targetUrls) {
@@ -150,9 +176,16 @@ class DeepResearchWorker {
       for (const chunk of chunks) {
         let embedding = null;
         try {
-          embedding = await this.ollama.generateEmbedding({ model, input: chunk });
+          embedding = await this.ollama.generateEmbedding({ model: embedModel, input: chunk });
         } catch (_e) {
-          // Fallback
+          embedding = null;
+        }
+
+        // Skip chunks that could not be embedded — a dead vector is unretrievable
+        // and the write boundary would reject it (invariant #4).
+        if (!Array.isArray(embedding) || embedding.length === 0) {
+          totalFailed++;
+          continue;
         }
 
         this.repository.saveSpecialistChunk({
@@ -160,19 +193,26 @@ class DeepResearchWorker {
           sourceTitle: `Web: ${title}`,
           sourceUrl: url,
           chunkText: chunk,
-          embedding: embedding || [],
+          embedding,
+          embeddingModel: embedModel,
         });
 
         totalChunks++;
       }
     }
 
+    if (totalChunks === 0) {
+      const reason = `Scraped ${targetUrls.length} sources but indexed nothing — check that the embedding model "${embedModel}" is installed and supports embeddings, or that sources were reachable.`;
+      onProgress({ status: 'error', message: reason });
+      return { success: false, reason, totalChunks: 0, totalFailed };
+    }
+
     onProgress({
       status: 'complete',
-      message: `Deep research finished! Indexed ${totalChunks} knowledge chunks into Specialist Hub.`,
+      message: `Deep research finished! Indexed ${totalChunks} knowledge chunks${totalFailed ? ` (${totalFailed} failed to embed)` : ''} into Specialist Hub.`,
     });
 
-    return { success: true, totalChunks };
+    return { success: true, totalChunks, totalFailed };
   }
 }
 

@@ -7,7 +7,7 @@ const { randomUUID } = require('node:crypto');
 // MIGRATIONS whenever the schema changes. The corpus is the project's asset
 // (see ROADMAP.md §3) — every migration runs behind a backup and an integrity
 // check so a bad upgrade can never destroy user data.
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAX_BACKUPS = 5;
 
 const DEFAULT_TITLE = 'New conversation';
@@ -19,6 +19,10 @@ const DEFAULT_SETTINGS = {
   tavilyApiKey: '',
   braveApiKey: '',
   autoMemoryEnabled: 'true',
+  // Embeddings use a dedicated model, decoupled from the chat model, so switching
+  // the chat model never changes vector dimensions and orphans the vault
+  // (ROADMAP §3 invariant #5). nomic-embed-text is 768-d and purpose-built.
+  embeddingModel: 'nomic-embed-text',
 };
 
 const DEFAULT_PROFILE = {
@@ -45,6 +49,21 @@ function cosineSimilarity(vecA, vecB) {
   }
   if (normA === 0 || normB === 0) return 0;
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// The embedding contract's write-boundary check (ROADMAP §3 invariant #4). A
+// chunk without a valid, finite, non-empty vector is invisible to retrieval, not
+// merely degraded — so we refuse to persist one rather than store a dead row that
+// inflates counts and silently returns nothing.
+function assertValidEmbedding(embedding) {
+  if (!Array.isArray(embedding) || embedding.length === 0) {
+    throw new Error('Embedding is empty — refusing to store an unretrievable chunk.');
+  }
+  for (const value of embedding) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new Error('Embedding contains a non-finite value — refusing to store.');
+    }
+  }
 }
 
 function createAutoTitle(content) {
@@ -162,6 +181,23 @@ class ConversationRepository {
     }
   }
 
+  // Adds a column to an existing table only when both the table exists and the
+  // column does not. On a fresh database the table has not been created yet at
+  // migration time (migrations run before initialize()), so this is a safe no-op
+  // and initialize() creates the table with the column already present.
+  addColumnIfMissing(table, column, type) {
+    const tableExists = this.db
+      .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`)
+      .get(table);
+    if (!tableExists) {
+      return;
+    }
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all();
+    if (!columns.some((c) => c.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
+  }
+
   // Ordered, additive migrations. Migration 1 is the baseline: the schema is
   // created idempotently by initialize(), so on both fresh and legacy (pre-
   // versioning) databases this migration only stamps the version. Future schema
@@ -169,7 +205,29 @@ class ConversationRepository {
   runMigrations() {
     const migrations = [
       { version: 1, up: () => {} },
+      {
+        // Embedding provenance: tag every stored vector with the model that
+        // produced it and its dimension, so retrieval can exclude vectors that
+        // no longer match the active embedding model instead of silently scoring
+        // them 0 (ROADMAP §3 invariant #4, §5 Phase 1). Legacy rows keep NULLs and
+        // are excluded until re-indexed (Phase 4).
+        version: 2,
+        up: () => {
+          this.addColumnIfMissing('specialist_chunks', 'embedding_model', 'TEXT');
+          this.addColumnIfMissing('specialist_chunks', 'embedding_dim', 'INTEGER');
+          this.addColumnIfMissing('message_embeddings', 'embedding_model', 'TEXT');
+          this.addColumnIfMissing('message_embeddings', 'embedding_dim', 'INTEGER');
+        },
+      },
     ];
+
+    // Guard against drift: the migration list must reach the declared version.
+    const latest = migrations[migrations.length - 1].version;
+    if (latest !== SCHEMA_VERSION) {
+      throw new Error(
+        `Migration list ends at v${latest} but SCHEMA_VERSION is ${SCHEMA_VERSION}.`,
+      );
+    }
 
     const current = this.getSchemaVersion();
     const pending = migrations.filter((m) => m.version > current);
@@ -228,6 +286,8 @@ class ConversationRepository {
         conversation_id TEXT NOT NULL,
         chunk_text TEXT NOT NULL,
         embedding_json TEXT NOT NULL,
+        embedding_model TEXT,
+        embedding_dim INTEGER,
         created_at TEXT NOT NULL,
         FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
       );
@@ -259,6 +319,8 @@ class ConversationRepository {
         source_url TEXT,
         chunk_text TEXT NOT NULL,
         embedding_json TEXT NOT NULL,
+        embedding_model TEXT,
+        embedding_dim INTEGER,
         created_at TEXT NOT NULL,
         FOREIGN KEY (hub_id) REFERENCES specialist_hubs(id) ON DELETE CASCADE
       );
@@ -468,17 +530,19 @@ class ConversationRepository {
     return result.changes > 0;
   }
 
-  saveMessageEmbedding({ messageId, conversationId, chunkText, embedding }) {
+  saveMessageEmbedding({ messageId, conversationId, chunkText, embedding, embeddingModel = null }) {
+    assertValidEmbedding(embedding);
     const timestamp = now();
     const id = randomUUID();
     const embeddingJson = JSON.stringify(embedding);
 
     this.db
       .prepare(`
-        INSERT INTO message_embeddings (id, message_id, conversation_id, chunk_text, embedding_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO message_embeddings
+          (id, message_id, conversation_id, chunk_text, embedding_json, embedding_model, embedding_dim, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `)
-      .run(id, messageId, conversationId, chunkText, embeddingJson, timestamp);
+      .run(id, messageId, conversationId, chunkText, embeddingJson, embeddingModel, embedding.length, timestamp);
   }
 
   searchVectorMemory(queryEmbedding, limit = 5, currentConversationId = null) {
@@ -486,22 +550,28 @@ class ConversationRepository {
       return [];
     }
 
+    // Only compare against vectors of the same dimension. Rows from a different
+    // embedding model (or legacy rows with NULL dim) can never match meaningfully
+    // and are excluded here rather than silently scored 0 (invariant #4).
+    const dim = queryEmbedding.length;
+
     let rows;
     if (currentConversationId) {
       rows = this.db
         .prepare(`
           SELECT conversation_id, chunk_text, embedding_json
           FROM message_embeddings
-          WHERE conversation_id != ?
+          WHERE conversation_id != ? AND embedding_dim = ?
         `)
-        .all(currentConversationId);
+        .all(currentConversationId, dim);
     } else {
       rows = this.db
         .prepare(`
           SELECT conversation_id, chunk_text, embedding_json
           FROM message_embeddings
+          WHERE embedding_dim = ?
         `)
-        .all();
+        .all(dim);
     }
 
     const scored = rows
@@ -743,6 +813,8 @@ class ConversationRepository {
           source_url AS sourceUrl,
           chunk_text AS chunkText,
           embedding_json AS embeddingJson,
+          embedding_model AS embeddingModel,
+          embedding_dim AS embeddingDim,
           created_at AS createdAt
         FROM specialist_chunks
         WHERE hub_id = ?
@@ -780,8 +852,9 @@ class ConversationRepository {
       VALUES (@id, @name, @description, @systemPrompt, @icon, @createdAt, @updatedAt)
     `);
     const insertChunk = this.db.prepare(`
-      INSERT OR IGNORE INTO specialist_chunks (id, hub_id, source_title, source_url, chunk_text, embedding_json, created_at)
-      VALUES (@id, @hubId, @sourceTitle, @sourceUrl, @chunkText, @embeddingJson, @createdAt)
+      INSERT OR IGNORE INTO specialist_chunks
+        (id, hub_id, source_title, source_url, chunk_text, embedding_json, embedding_model, embedding_dim, created_at)
+      VALUES (@id, @hubId, @sourceTitle, @sourceUrl, @chunkText, @embeddingJson, @embeddingModel, @embeddingDim, @createdAt)
     `);
     const insertProfile = this.db.prepare(`
       INSERT INTO user_profile (key, value) VALUES (?, ?)
@@ -845,6 +918,8 @@ class ConversationRepository {
             sourceUrl: chunk.sourceUrl ?? '',
             chunkText: chunk.chunkText,
             embeddingJson: chunk.embeddingJson,
+            embeddingModel: chunk.embeddingModel ?? null,
+            embeddingDim: chunk.embeddingDim ?? null,
             createdAt: chunk.createdAt,
           });
           counts.specialistChunks += cres.changes;
@@ -997,17 +1072,19 @@ class ConversationRepository {
     return result.changes > 0;
   }
 
-  saveSpecialistChunk({ hubId, sourceTitle, sourceUrl = '', chunkText, embedding }) {
+  saveSpecialistChunk({ hubId, sourceTitle, sourceUrl = '', chunkText, embedding, embeddingModel = null }) {
+    assertValidEmbedding(embedding);
     const timestamp = now();
     const id = randomUUID();
     const embeddingJson = JSON.stringify(embedding);
 
     this.db
       .prepare(`
-        INSERT INTO specialist_chunks (id, hub_id, source_title, source_url, chunk_text, embedding_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO specialist_chunks
+          (id, hub_id, source_title, source_url, chunk_text, embedding_json, embedding_model, embedding_dim, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
-      .run(id, hubId, sourceTitle, sourceUrl, chunkText, embeddingJson, timestamp);
+      .run(id, hubId, sourceTitle, sourceUrl, chunkText, embeddingJson, embeddingModel, embedding.length, timestamp);
 
     // Update hub timestamp
     this.db
@@ -1020,13 +1097,17 @@ class ConversationRepository {
       return [];
     }
 
+    // Restrict to vectors of the same dimension as the query. Chunks embedded with
+    // a different model (or legacy NULL-dim chunks awaiting re-index) are excluded
+    // rather than silently scored 0 (invariant #4).
+    const dim = queryEmbedding.length;
     const rows = this.db
       .prepare(`
         SELECT hub_id, source_title, source_url, chunk_text, embedding_json
         FROM specialist_chunks
-        WHERE hub_id = ?
+        WHERE hub_id = ? AND embedding_dim = ?
       `)
-      .all(hubId);
+      .all(hubId, dim);
 
     const scored = rows
       .map((row) => {
@@ -1077,6 +1158,7 @@ module.exports = {
   DEFAULT_TITLE,
   DEFAULT_SETTINGS,
   DEFAULT_PROFILE,
+  SCHEMA_VERSION,
   createAutoTitle,
 };
 

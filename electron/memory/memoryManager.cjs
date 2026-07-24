@@ -4,7 +4,11 @@ class MemoryManager {
     this.ollama = ollama;
   }
 
-  async retrieveContext({ query, currentConversationId, model }) {
+  async retrieveContext({ query, currentConversationId, model, embeddingModel }) {
+    // Cross-conversation RAG queries the vector store, which is keyed by embedding
+    // dimension — so the query MUST be embedded with the same dedicated embedding
+    // model the chunks were written with, never the chat model (invariant #5).
+    const embedModel = embeddingModel || model;
     const contextSections = [];
 
     // 1. Retrieve Structured User Memories
@@ -20,9 +24,9 @@ class MemoryManager {
 
     // 2. Retrieve Vector RAG Memory (Cross-conversation historical memory)
     try {
-      if (query && model) {
+      if (query && embedModel) {
         const queryEmbedding = await this.ollama.generateEmbedding({
-          model,
+          model: embedModel,
           input: query,
         });
 
@@ -173,14 +177,15 @@ class MemoryManager {
     }
   }
 
-  async indexMessageEmbedding({ messageId, conversationId, content, model }) {
-    if (!content || !model || content.length < 20) {
+  async indexMessageEmbedding({ messageId, conversationId, content, model, embeddingModel }) {
+    const embedModel = embeddingModel || model;
+    if (!content || !embedModel || content.length < 20) {
       return;
     }
 
     try {
       const embedding = await this.ollama.generateEmbedding({
-        model,
+        model: embedModel,
         input: content,
       });
 
@@ -190,6 +195,7 @@ class MemoryManager {
           conversationId,
           chunkText: content.slice(0, 500),
           embedding,
+          embeddingModel: embedModel,
         });
       }
     } catch (_e) {

@@ -109,6 +109,7 @@ function registerIpcHandlers({ userDataPath }) {
       seedUrls: seedUrls || [],
       depth: depth || 1,
       model,
+      embeddingModel: repository.getSetting('embeddingModel'),
       searchOptions: {
         provider: allSettings.searchProvider || 'duckduckgo',
         searxngUrl: allSettings.searxngUrl,
@@ -145,6 +146,7 @@ function registerIpcHandlers({ userDataPath }) {
       hubId,
       filePath,
       model,
+      embeddingModel: repository.getSetting('embeddingModel'),
       onProgress: (progress) => {
         event.sender.send(channels.events.researchProgress, { hubId, ...progress });
       },
@@ -223,6 +225,10 @@ function registerIpcHandlers({ userDataPath }) {
       throw new Error('No Ollama models are available.');
     }
 
+    // Embeddings use the dedicated embedding model regardless of the chat model,
+    // so vector dimensions stay stable across chat-model switches (invariant #5).
+    const embeddingModel = repository.getSetting('embeddingModel');
+
     // Check Settings
     const allSettings = repository.getAllSettings();
     const isWebSearchEnabled =
@@ -289,6 +295,7 @@ function registerIpcHandlers({ userDataPath }) {
         query: content,
         currentConversationId: conversation.id,
         model,
+        embeddingModel,
       });
     } catch (memErr) {
       console.error('Memory Retrieval Error:', memErr.message);
@@ -305,7 +312,7 @@ function registerIpcHandlers({ userDataPath }) {
         const hub = repository.getSpecialistHub(payload.activeSpecialistId);
         if (hub) {
           let specialistRag = '';
-          const queryEmbedding = await ollama.generateEmbedding({ model, input: content });
+          const queryEmbedding = await ollama.generateEmbedding({ model: embeddingModel, input: content });
           if (queryEmbedding && queryEmbedding.length > 0) {
             const matches = repository.searchSpecialistVectorMemory(hub.id, queryEmbedding, 4);
             if (matches && matches.length > 0) {
@@ -399,6 +406,7 @@ function registerIpcHandlers({ userDataPath }) {
             conversationId: conversation.id,
             content,
             model,
+            embeddingModel,
           }),
         ]).catch(() => {
           // Ignore background task errors

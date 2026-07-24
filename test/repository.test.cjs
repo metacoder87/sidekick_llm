@@ -8,8 +8,14 @@ const Database = require('better-sqlite3');
 const {
   ConversationRepository,
   DEFAULT_TITLE,
+  SCHEMA_VERSION,
   createAutoTitle,
 } = require('../electron/repository.cjs');
+
+function rmDir(dir) {
+  // Windows can briefly hold a lock on just-closed SQLite files; retry the cleanup.
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+}
 
 test('repository stores messages, auto-titles default conversations, and exports history', () => {
   const repository = new ConversationRepository(':memory:');
@@ -119,9 +125,50 @@ test('repository saves message vector embeddings and performs cosine search', ()
   repository.close();
 });
 
+test('repository excludes dimension-mismatched vectors from retrieval (model-switch safety)', () => {
+  const repository = new ConversationRepository(':memory:');
+  const hub = repository.createSpecialistHub({ name: 'Dim Test' });
+
+  // Chunk embedded by a 4-dim model.
+  repository.saveSpecialistChunk({
+    hubId: hub.id,
+    sourceTitle: 'doc',
+    chunkText: 'content embedded at dimension four',
+    embedding: [1, 0, 0, 0],
+    embeddingModel: 'model-A',
+  });
+
+  // Query with a matching-dimension vector → found.
+  assert.equal(repository.searchSpecialistVectorMemory(hub.id, [0.9, 0.1, 0, 0], 4).length, 1);
+
+  // Query with a different-dimension vector (as if the user switched models) →
+  // excluded, not silently scored 0.
+  assert.equal(repository.searchSpecialistVectorMemory(hub.id, [0.9, 0.1, 0], 4).length, 0);
+
+  repository.close();
+});
+
+test('repository write boundary refuses empty or non-finite embeddings', () => {
+  const repository = new ConversationRepository(':memory:');
+  const hub = repository.createSpecialistHub({ name: 'Guard Test' });
+
+  assert.throws(
+    () => repository.saveSpecialistChunk({ hubId: hub.id, sourceTitle: 'd', chunkText: 'x', embedding: [] }),
+    /empty/i,
+  );
+  assert.throws(
+    () => repository.saveSpecialistChunk({ hubId: hub.id, sourceTitle: 'd', chunkText: 'x', embedding: [1, NaN, 2] }),
+    /non-finite/i,
+  );
+  // Nothing was persisted.
+  assert.equal(repository.getSpecialistHub(hub.id).chunkCount, 0);
+
+  repository.close();
+});
+
 test('repository stamps schema version and reports a clean integrity check', () => {
   const repository = new ConversationRepository(':memory:');
-  assert.equal(repository.getSchemaVersion(), 1);
+  assert.equal(repository.getSchemaVersion(), SCHEMA_VERSION);
   assert.equal(repository.integrity.ok, true);
   assert.equal(repository.integrity.detail, 'ok');
   repository.close();
@@ -144,8 +191,8 @@ test('repository backs up a legacy unversioned database before migrating, preser
 
     const repository = new ConversationRepository(dbPath);
 
-    // Version bumped, legacy row survived.
-    assert.equal(repository.getSchemaVersion(), 1);
+    // Version bumped to the current schema, legacy row survived.
+    assert.equal(repository.getSchemaVersion(), SCHEMA_VERSION);
     const survivor = repository.db
       .prepare(`SELECT title FROM conversations WHERE id = 'legacy-1'`)
       .get();
@@ -157,7 +204,7 @@ test('repository backs up a legacy unversioned database before migrating, preser
 
     repository.close();
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
