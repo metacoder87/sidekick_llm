@@ -421,7 +421,10 @@ quality is the ceiling on everything; this stage raises it.*
             inline edit still TODO);
       - [ ] decay/staleness. *Verified live: 5 adds w/ 2 dups → 3 stored; relevant
             fact outranks recent one.*
-- [ ] **Model routing** implemented (invariant #5).
+- [x] **Model routing** (invariant #5): opt-in `backgroundModel` for summaries, fact
+      extraction, and research query generation (empty = chat model). Settings UI
+      selector. *Verified: routes to the background model when set, falls back
+      otherwise.*
 - [ ] **Notes as first-class objects.** User- or model-authored, attached to an
       Expert, themselves embedded + retrievable. NotebookLM's most-loved feature;
       how *insight* compounds vs. documents merely piling up. The author explicitly
