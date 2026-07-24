@@ -10,6 +10,7 @@ const { performWebSearch } = require('./search/searchService.cjs');
 const { scrapeTopResults } = require('./search/scraper.cjs');
 const { MemoryManager } = require('./memory/memoryManager.cjs');
 const { DeepResearchWorker } = require('./research/deepResearch.cjs');
+const { selectTopMatches, contributionByExpert } = require('./retrieval.cjs');
 
 function stampFilename(prefix) {
   const value = new Date().toISOString().replace(/[:.]/g, '-');
@@ -356,41 +357,55 @@ function registerIpcHandlers({ userDataPath }) {
     if (activeSpecialistIds.length > 0) {
       try {
         const queryEmbedding = await ollama.generateEmbedding({ model: embeddingModel, input: content });
-        const consulted = [];
-        const roleBlocks = [];
-        let totalMatches = 0;
 
+        // Gather candidate matches from every consulted vault (deeper per-vault so
+        // the global reranker has enough to choose from), then keep the single best
+        // few across all vaults — the strongest knowledge wins regardless of which
+        // expert produced it.
+        const hubs = [];
+        const groups = [];
         for (const specialistId of activeSpecialistIds) {
           const hub = repository.getSpecialistHub(specialistId);
           if (!hub) continue;
-
-          let matches = [];
-          if (queryEmbedding && queryEmbedding.length > 0) {
-            matches = repository.searchSpecialistVectorMemory(hub.id, queryEmbedding, 4, embeddingModel) || [];
-          }
-          totalMatches += matches.length;
-          consulted.push({ id: hub.id, name: hub.name, matches: matches.length });
-
-          const knowledge = matches.length
-            ? `Relevant knowledge from this expert's vault:\n${matches
-                .map((m) => `[${hub.name} · ${m.sourceTitle}]: "${m.chunkText}"`)
-                .join('\n\n')}`
-            : `(No matching knowledge found in this expert's vault for this question — answer from expertise only, and say so.)`;
-
-          roleBlocks.push(
-            `### Expert: ${hub.name}\n${hub.description ? `${hub.description}\n` : ''}${hub.systemPrompt ? `Instructions: ${hub.systemPrompt}\n` : ''}${knowledge}`,
-          );
+          hubs.push(hub);
+          const matches =
+            queryEmbedding && queryEmbedding.length > 0
+              ? repository.searchSpecialistVectorMemory(hub.id, queryEmbedding, 8, embeddingModel) || []
+              : [];
+          groups.push({ expert: { id: hub.id, name: hub.name }, matches });
         }
 
-        if (consulted.length > 0) {
+        if (hubs.length > 0) {
+          const topChunks = selectTopMatches(groups, 6);
+          const contribution = contributionByExpert(topChunks);
+
+          // Persona/instructions for every consulted expert.
+          const roleBlocks = hubs.map(
+            (hub) =>
+              `### Expert: ${hub.name}\n${hub.description ? `${hub.description}\n` : ''}${hub.systemPrompt ? `Instructions: ${hub.systemPrompt}\n` : ''}`,
+          );
+
+          // A single globally-ranked knowledge section, labeled by expert + source.
+          const knowledgeSection = topChunks.length
+            ? `Retrieved knowledge (ranked across all consulted vaults):\n${topChunks
+                .map((c) => `[${c.expertName} · ${c.sourceTitle}]: "${c.chunkText}"`)
+                .join('\n\n')}`
+            : `(No matching knowledge was found in the consulted vaults for this question — answer from expertise only, and say so.)`;
+
           const panelIntro =
-            consulted.length === 1
-              ? `You are operating as the AI Specialist "${consulted[0].name}".`
-              : `You are consulting a panel of ${consulted.length} AI Specialists: ${consulted
-                  .map((c) => c.name)
+            hubs.length === 1
+              ? `You are operating as the AI Specialist "${hubs[0].name}".`
+              : `You are consulting a panel of ${hubs.length} AI Specialists: ${hubs
+                  .map((h) => h.name)
                   .join(', ')}. Integrate their expertise; when experts would disagree, present the perspectives rather than flattening them.`;
-          specialistContext = `\n<specialist_panel>\n${panelIntro}\nWhen you use an expert's vault knowledge, cite the expert and source. Do not fabricate sources.\n\n${roleBlocks.join('\n\n')}\n</specialist_panel>\n`;
-          specialistGrounding = { experts: consulted, grounded: totalMatches > 0, matches: totalMatches };
+
+          specialistContext = `\n<specialist_panel>\n${panelIntro}\nWhen you use an expert's vault knowledge, cite the expert and source. Do not fabricate sources.\n\n${roleBlocks.join('\n')}\n${knowledgeSection}\n</specialist_panel>\n`;
+
+          specialistGrounding = {
+            experts: hubs.map((h) => ({ id: h.id, name: h.name, matches: contribution.get(h.id) || 0 })),
+            grounded: topChunks.length > 0,
+            matches: topChunks.length,
+          };
         }
       } catch (specErr) {
         console.error('Specialist RAG Error:', specErr.message);

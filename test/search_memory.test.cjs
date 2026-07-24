@@ -3,6 +3,44 @@ const assert = require('node:assert/strict');
 
 const { extractMainText } = require('../electron/search/scraper.cjs');
 const { rankMemoriesByRelevance } = require('../electron/memory/memoryManager.cjs');
+const { selectTopMatches, contributionByExpert } = require('../electron/retrieval.cjs');
+
+test('selectTopMatches globally ranks chunks across vaults, so the best win regardless of expert', () => {
+  const groups = [
+    {
+      expert: { id: 'a', name: 'Expert A' },
+      matches: [
+        { sourceTitle: 'a1', chunkText: 'weak a', score: 0.50 },
+        { sourceTitle: 'a2', chunkText: 'mid a', score: 0.72 },
+      ],
+    },
+    {
+      expert: { id: 'b', name: 'Expert B' },
+      matches: [
+        { sourceTitle: 'b1', chunkText: 'best b', score: 0.91 },
+        { sourceTitle: 'b2', chunkText: 'good b', score: 0.80 },
+      ],
+    },
+  ];
+
+  const top = selectTopMatches(groups, 3);
+  assert.equal(top.length, 3);
+  // Highest score first, across experts.
+  assert.deepEqual(top.map((t) => t.sourceTitle), ['b1', 'b2', 'a2']);
+  // The weakest chunk (a1, 0.50) was dropped even though its expert was consulted.
+  assert.ok(!top.some((t) => t.sourceTitle === 'a1'));
+
+  const contrib = contributionByExpert(top);
+  assert.equal(contrib.get('b'), 2);
+  assert.equal(contrib.get('a'), 1);
+});
+
+test('selectTopMatches handles empty groups and missing scores', () => {
+  assert.deepEqual(selectTopMatches([], 5), []);
+  const top = selectTopMatches([{ expert: { id: 'x', name: 'X' }, matches: [{ sourceTitle: 's', chunkText: 'c' }] }], 5);
+  assert.equal(top.length, 1);
+  assert.equal(top[0].score, 0);
+});
 
 test('rankMemoriesByRelevance surfaces query-relevant facts over merely-recent ones', () => {
   const memories = [
