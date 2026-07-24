@@ -158,6 +158,21 @@ export default function App() {
 
   async function bootstrap() {
     await Promise.all([refreshConversationList(), refreshOllamaStatus()]);
+
+    // Surface database corruption instead of failing silently. The corpus is the
+    // asset — if SQLite reports an integrity problem, the user needs to know before
+    // trusting or writing to it (see ROADMAP §5 Phase −1).
+    try {
+      const integrity = await sidekick.system.getIntegrity();
+      if (integrity && integrity.ok === false) {
+        setNotice(
+          `⚠️ Local database integrity check failed (${integrity.detail}). ` +
+            `A backup of your data may be needed — avoid heavy use until resolved.`,
+        );
+      }
+    } catch (_error) {
+      // Integrity channel unavailable (older preload); non-fatal.
+    }
   }
 
   useEffect(() => {
@@ -405,7 +420,30 @@ export default function App() {
 
     const result = await sidekick.chat.exportAll();
     if (result.saved) {
-      setNotice(`Saved history export to ${result.filePath}`);
+      setNotice(`Saved corpus export to ${result.filePath}`);
+    }
+  }
+
+  async function handleImportAll() {
+    if (!sidekick) {
+      return;
+    }
+
+    try {
+      const result = await sidekick.chat.importAll();
+      if (result.cancelled) {
+        return;
+      }
+      if (result.imported) {
+        const c = result.counts;
+        setNotice(
+          `Imported ${c.conversations} conversations, ${c.userMemories} memories, ` +
+            `${c.specialistHubs} experts (${c.specialistChunks} knowledge chunks).`,
+        );
+        await refreshConversationList();
+      }
+    } catch (error) {
+      setNotice(`Import failed: ${error.message}`);
     }
   }
 
@@ -426,6 +464,7 @@ export default function App() {
         onRenameConversation={handleRenameConversation}
         onDeleteConversation={handleDeleteConversation}
         onExportAll={handleExportAll}
+        onImportAll={handleImportAll}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenSpecialistPicker={() => setIsSpecialistPickerOpen(true)}
         activeSpecialistHub={activeSpecialistHub}

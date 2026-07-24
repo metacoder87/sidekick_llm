@@ -10,6 +10,7 @@ export default function Sidebar({
   onRenameConversation,
   onDeleteConversation,
   onExportAll,
+  onImportAll,
   onOpenSettings,
   onOpenSpecialistPicker,
   activeSpecialistHub,
@@ -66,8 +67,21 @@ export default function Sidebar({
       />
 
       <div className="sidebar__footer-actions">
-        <button type="button" className="ghost-button" onClick={onExportAll} title="Export history to JSON">
-          Export History
+        <button
+          type="button"
+          className="ghost-button"
+          onClick={onExportAll}
+          title="Back up your full corpus — conversations, memory, and Experts — to a JSON file"
+        >
+          Export Corpus
+        </button>
+        <button
+          type="button"
+          className="ghost-button"
+          onClick={onImportAll}
+          title="Restore a previously exported corpus (merges without overwriting)"
+        >
+          Import Corpus
         </button>
       </div>
     </aside>

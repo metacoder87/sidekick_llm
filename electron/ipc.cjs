@@ -451,6 +451,37 @@ function registerIpcHandlers({ userDataPath }) {
     return { saved: true, filePath: target.filePath };
   });
 
+  ipcMain.handle(channels.chat.importAll, async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Import Sidekick corpus (conversations, memory, experts)',
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+      properties: ['openFile'],
+    });
+
+    if (result.canceled || !result.filePaths[0]) {
+      return { imported: false, cancelled: true };
+    }
+
+    const raw = await fs.readFile(result.filePaths[0], 'utf8');
+    let payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch (_error) {
+      throw new Error('Selected file is not valid JSON.');
+    }
+
+    if (payload.app !== 'sidekick-llm' || payload.kind !== 'corpus-export') {
+      throw new Error('Selected file is not a Sidekick corpus export.');
+    }
+
+    const counts = repository.importAll(payload);
+    return { imported: true, counts, filePath: result.filePaths[0] };
+  });
+
+  ipcMain.handle(channels.system.getIntegrity, async () => {
+    return repository.integrity;
+  });
+
   ipcMain.handle(channels.chat.exportAll, async () => {
     const payload = repository.exportAll();
     const target = await dialog.showSaveDialog({

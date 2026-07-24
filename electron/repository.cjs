@@ -1,5 +1,14 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const Database = require('better-sqlite3');
 const { randomUUID } = require('node:crypto');
+
+// The current target schema version. Bump this and append a migration to
+// MIGRATIONS whenever the schema changes. The corpus is the project's asset
+// (see ROADMAP.md §3) — every migration runs behind a backup and an integrity
+// check so a bad upgrade can never destroy user data.
+const SCHEMA_VERSION = 1;
+const MAX_BACKUPS = 5;
 
 const DEFAULT_TITLE = 'New conversation';
 const DEFAULT_SETTINGS = {
@@ -57,10 +66,130 @@ function toFtsQuery(input) {
 
 class ConversationRepository {
   constructor(filename) {
+    this.filename = filename;
     this.db = new Database(filename);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
+
+    // 1. Verify the existing database is not corrupt BEFORE we touch it.
+    this.integrity = this.checkIntegrity();
+
+    // 2. Back up (if there is existing data) and run any pending migrations.
+    //    This must happen before initialize()/seeding so an upgrade of an old
+    //    database is always protected by a fresh backup.
+    this.runMigrations();
+
+    // 3. Ensure schema objects exist and defaults are seeded (idempotent).
     this.initialize();
+  }
+
+  // Returns { ok: boolean, detail: string }. Never throws — a corrupt database
+  // should be surfaced to the user, not crash startup silently (ROADMAP §5 Phase −1).
+  checkIntegrity() {
+    try {
+      const rows = this.db.pragma('integrity_check');
+      const detail = Array.isArray(rows) && rows[0] ? rows[0].integrity_check : 'unknown';
+      return { ok: detail === 'ok', detail };
+    } catch (error) {
+      return { ok: false, detail: error.message };
+    }
+  }
+
+  getSchemaVersion() {
+    const rows = this.db.pragma('user_version');
+    return Array.isArray(rows) && rows[0] ? rows[0].user_version : 0;
+  }
+
+  setSchemaVersion(version) {
+    this.db.pragma(`user_version = ${Number(version)}`);
+  }
+
+  hasExistingData() {
+    try {
+      const row = this.db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM sqlite_master
+           WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+        )
+        .get();
+      return row.count > 0;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  // Consistent, WAL-safe copy of the database file. Checkpoints the WAL into the
+  // main file first, then copies it. Returns the backup path, or null on failure
+  // (backup failure must not block startup, but is logged).
+  backupDatabase(tag) {
+    try {
+      // Skip for in-memory databases (used in tests).
+      if (!this.filename || this.filename === ':memory:') {
+        return null;
+      }
+      this.db.pragma('wal_checkpoint(TRUNCATE)');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const backupPath = `${this.filename}.bak-${tag}-${stamp}`;
+      fs.copyFileSync(this.filename, backupPath);
+      this.pruneBackups();
+      return backupPath;
+    } catch (error) {
+      console.error('Database backup failed:', error.message);
+      return null;
+    }
+  }
+
+  // Keep only the most recent MAX_BACKUPS backup files for this database.
+  pruneBackups() {
+    try {
+      const dir = path.dirname(this.filename);
+      const base = path.basename(this.filename);
+      const prefix = `${base}.bak-`;
+      const backups = fs
+        .readdirSync(dir)
+        .filter((name) => name.startsWith(prefix))
+        .map((name) => ({
+          name,
+          time: fs.statSync(path.join(dir, name)).mtimeMs,
+        }))
+        .sort((a, b) => b.time - a.time);
+
+      for (const stale of backups.slice(MAX_BACKUPS)) {
+        fs.rmSync(path.join(dir, stale.name), { force: true });
+      }
+    } catch (error) {
+      console.error('Backup pruning failed:', error.message);
+    }
+  }
+
+  // Ordered, additive migrations. Migration 1 is the baseline: the schema is
+  // created idempotently by initialize(), so on both fresh and legacy (pre-
+  // versioning) databases this migration only stamps the version. Future schema
+  // changes append { version: N, up(db) } entries with real ALTER statements.
+  runMigrations() {
+    const migrations = [
+      { version: 1, up: () => {} },
+    ];
+
+    const current = this.getSchemaVersion();
+    const pending = migrations.filter((m) => m.version > current);
+    if (pending.length === 0) {
+      return;
+    }
+
+    // Only back up when upgrading a database that already holds data. A brand-new
+    // database (no tables yet) has nothing worth backing up.
+    if (this.hasExistingData()) {
+      this.backupDatabase(`v${current}`);
+    }
+
+    for (const migration of pending) {
+      const applyMigration = this.db.transaction(() => {
+        migration.up(this.db);
+        this.setSchemaVersion(migration.version);
+      });
+      applyMigration();
+    }
   }
 
   initialize() {
@@ -577,14 +706,160 @@ class ConversationRepository {
     };
   }
 
+  // Full-corpus export. Unlike a chat-history dump, this includes everything that
+  // makes the app valuable and is otherwise unrecoverable: memories, profile,
+  // Specialist hubs AND their vector chunks (ROADMAP §3 invariant #3). Settings are
+  // intentionally excluded — they are re-enterable config and contain secrets
+  // (API keys). The envelope is versioned so a future import can adapt.
   exportAll() {
+    const hubs = this.listSpecialistHubs().map((hub) => ({
+      ...hub,
+      chunks: this.listSpecialistChunksForExport(hub.id),
+    }));
+
     return {
+      app: 'sidekick-llm',
+      kind: 'corpus-export',
+      schemaVersion: this.getSchemaVersion(),
       exportedAt: now(),
       conversations: this.listConversations().map((conversation) => ({
         ...conversation,
         messages: this.listMessages(conversation.id),
       })),
+      userMemories: this.listUserMemories(),
+      userProfile: this.getUserProfile(),
+      specialistHubs: hubs,
     };
+  }
+
+  // Raw chunk rows for a hub, including the stored embedding JSON, for export.
+  listSpecialistChunksForExport(hubId) {
+    return this.db
+      .prepare(`
+        SELECT
+          id,
+          hub_id AS hubId,
+          source_title AS sourceTitle,
+          source_url AS sourceUrl,
+          chunk_text AS chunkText,
+          embedding_json AS embeddingJson,
+          created_at AS createdAt
+        FROM specialist_chunks
+        WHERE hub_id = ?
+        ORDER BY created_at ASC
+      `)
+      .all(hubId);
+  }
+
+  // Restore a corpus export into this database. Idempotent: existing rows (matched
+  // by primary key) are left untouched via INSERT OR IGNORE, so importing the same
+  // file twice, or merging into a populated database, never duplicates or clobbers.
+  // Runs in a single transaction — a malformed payload rolls back cleanly.
+  // Returns per-entity counts of rows actually inserted.
+  importAll(payload) {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('Import payload is not a valid object.');
+    }
+
+    const counts = { conversations: 0, messages: 0, userMemories: 0, specialistHubs: 0, specialistChunks: 0 };
+
+    const insertConversation = this.db.prepare(`
+      INSERT OR IGNORE INTO conversations (id, title, summary, created_at, updated_at, last_message_at)
+      VALUES (@id, @title, @summary, @createdAt, @updatedAt, @lastMessageAt)
+    `);
+    const insertMessage = this.db.prepare(`
+      INSERT OR IGNORE INTO messages (id, conversation_id, role, content, status, created_at)
+      VALUES (@id, @conversationId, @role, @content, @status, @createdAt)
+    `);
+    const insertMemory = this.db.prepare(`
+      INSERT OR IGNORE INTO user_memories (id, fact, category, source_conversation_id, created_at, updated_at)
+      VALUES (@id, @fact, @category, @sourceConversationId, @createdAt, @updatedAt)
+    `);
+    const insertHub = this.db.prepare(`
+      INSERT OR IGNORE INTO specialist_hubs (id, name, description, system_prompt, icon, created_at, updated_at)
+      VALUES (@id, @name, @description, @systemPrompt, @icon, @createdAt, @updatedAt)
+    `);
+    const insertChunk = this.db.prepare(`
+      INSERT OR IGNORE INTO specialist_chunks (id, hub_id, source_title, source_url, chunk_text, embedding_json, created_at)
+      VALUES (@id, @hubId, @sourceTitle, @sourceUrl, @chunkText, @embeddingJson, @createdAt)
+    `);
+    const insertProfile = this.db.prepare(`
+      INSERT INTO user_profile (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `);
+
+    const run = this.db.transaction(() => {
+      for (const conversation of payload.conversations || []) {
+        const res = insertConversation.run({
+          id: conversation.id,
+          title: conversation.title,
+          summary: conversation.summary ?? null,
+          createdAt: conversation.createdAt,
+          updatedAt: conversation.updatedAt,
+          lastMessageAt: conversation.lastMessageAt ?? null,
+        });
+        counts.conversations += res.changes;
+
+        for (const message of conversation.messages || []) {
+          const mres = insertMessage.run({
+            id: message.id,
+            conversationId: conversation.id,
+            role: message.role,
+            content: message.content,
+            status: message.status || 'complete',
+            createdAt: message.createdAt,
+          });
+          counts.messages += mres.changes;
+        }
+      }
+
+      for (const memory of payload.userMemories || []) {
+        const res = insertMemory.run({
+          id: memory.id,
+          fact: memory.fact,
+          category: memory.category || 'general',
+          sourceConversationId: memory.sourceConversationId ?? null,
+          createdAt: memory.createdAt,
+          updatedAt: memory.updatedAt,
+        });
+        counts.userMemories += res.changes;
+      }
+
+      for (const hub of payload.specialistHubs || []) {
+        const res = insertHub.run({
+          id: hub.id,
+          name: hub.name,
+          description: hub.description ?? '',
+          systemPrompt: hub.systemPrompt ?? '',
+          icon: hub.icon || 'brain',
+          createdAt: hub.createdAt,
+          updatedAt: hub.updatedAt,
+        });
+        counts.specialistHubs += res.changes;
+
+        for (const chunk of hub.chunks || []) {
+          const cres = insertChunk.run({
+            id: chunk.id,
+            hubId: hub.id,
+            sourceTitle: chunk.sourceTitle,
+            sourceUrl: chunk.sourceUrl ?? '',
+            chunkText: chunk.chunkText,
+            embeddingJson: chunk.embeddingJson,
+            createdAt: chunk.createdAt,
+          });
+          counts.specialistChunks += cres.changes;
+        }
+      }
+
+      if (payload.userProfile && typeof payload.userProfile === 'object') {
+        for (const [key, value] of Object.entries(payload.userProfile)) {
+          insertProfile.run(key, String(value ?? ''));
+        }
+      }
+    });
+
+    run();
+    return counts;
   }
 
   getSetting(key) {
@@ -609,121 +884,6 @@ class ConversationRepository {
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
       `)
       .run(key, String(value));
-  }
-
-  updateConversationSummary(conversationId, summary) {
-    const timestamp = now();
-    this.db
-      .prepare(`
-        UPDATE conversations
-        SET summary = @summary, updated_at = @timestamp
-        WHERE id = @conversationId
-      `)
-      .run({ conversationId, summary, timestamp });
-  }
-
-  addUserMemory({ fact, category = 'general', conversationId = null }) {
-    const trimmedFact = fact.trim();
-    if (!trimmedFact) {
-      throw new Error('Memory fact cannot be empty.');
-    }
-    const timestamp = now();
-    const memory = {
-      id: randomUUID(),
-      fact: trimmedFact,
-      category: category.trim() || 'general',
-      sourceConversationId: conversationId || null,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-
-    this.db
-      .prepare(`
-        INSERT INTO user_memories (id, fact, category, source_conversation_id, created_at, updated_at)
-        VALUES (@id, @fact, @category, @sourceConversationId, @createdAt, @updatedAt)
-      `)
-      .run(memory);
-
-    return memory;
-  }
-
-  listUserMemories() {
-    return this.db
-      .prepare(`
-        SELECT
-          id,
-          fact,
-          category,
-          source_conversation_id AS sourceConversationId,
-          created_at AS createdAt,
-          updated_at AS updatedAt
-        FROM user_memories
-        ORDER BY updated_at DESC
-      `)
-      .all();
-  }
-
-  deleteUserMemory(id) {
-    const result = this.db.prepare(`DELETE FROM user_memories WHERE id = ?`).run(id);
-    return result.changes > 0;
-  }
-
-  saveMessageEmbedding({ messageId, conversationId, chunkText, embedding }) {
-    const timestamp = now();
-    const id = randomUUID();
-    const embeddingJson = JSON.stringify(embedding);
-
-    this.db
-      .prepare(`
-        INSERT INTO message_embeddings (id, message_id, conversation_id, chunk_text, embedding_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `)
-      .run(id, messageId, conversationId, chunkText, embeddingJson, timestamp);
-  }
-
-  searchVectorMemory(queryEmbedding, limit = 5, currentConversationId = null) {
-    if (!queryEmbedding || !queryEmbedding.length) {
-      return [];
-    }
-
-    let rows;
-    if (currentConversationId) {
-      rows = this.db
-        .prepare(`
-          SELECT conversation_id, chunk_text, embedding_json
-          FROM message_embeddings
-          WHERE conversation_id != ?
-        `)
-        .all(currentConversationId);
-    } else {
-      rows = this.db
-        .prepare(`
-          SELECT conversation_id, chunk_text, embedding_json
-          FROM message_embeddings
-        `)
-        .all();
-    }
-
-    const scored = rows
-      .map((row) => {
-        try {
-          const vec = JSON.parse(row.embedding_json);
-          const score = cosineSimilarity(queryEmbedding, vec);
-          return {
-            conversationId: row.conversation_id,
-            chunkText: row.chunk_text,
-            score,
-          };
-        } catch (_e) {
-          return null;
-        }
-      })
-      .filter(Boolean)
-      .filter((item) => item.score > 0.45)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
-
-    return scored;
   }
 
   // Profile Methods

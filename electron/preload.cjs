@@ -28,6 +28,10 @@ contextBridge.exposeInMainWorld('sidekick', {
     cancelGeneration: (requestId) => ipcRenderer.invoke(channels.chat.cancelGeneration, requestId),
     exportConversation: (conversationId) => ipcRenderer.invoke(channels.chat.exportConversation, conversationId),
     exportAll: () => ipcRenderer.invoke(channels.chat.exportAll),
+    importAll: () => ipcRenderer.invoke(channels.chat.importAll),
+  },
+  system: {
+    getIntegrity: () => ipcRenderer.invoke(channels.system.getIntegrity),
   },
   settings: {
     get: () => ipcRenderer.invoke(channels.settings.get),

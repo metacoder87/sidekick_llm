@@ -17,7 +17,11 @@
     "sendMessageStream": "chat:sendMessageStream",
     "cancelGeneration": "chat:cancelGeneration",
     "exportConversation": "chat:exportConversation",
-    "exportAll": "chat:exportAll"
+    "exportAll": "chat:exportAll",
+    "importAll": "chat:importAll"
+  },
+  "system": {
+    "getIntegrity": "system:getIntegrity"
   },
   "settings": {
     "get": "settings:get",
