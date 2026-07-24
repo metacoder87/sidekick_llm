@@ -13,8 +13,9 @@ export default function Sidebar({
   onImportAll,
   onOpenSettings,
   onOpenSpecialistPicker,
-  activeSpecialistHub,
+  activeSpecialistHubs = [],
 }) {
+  const panelCount = activeSpecialistHubs.length;
   return (
     <aside className="sidebar">
       <div className="sidebar__header-bar">
@@ -32,11 +33,15 @@ export default function Sidebar({
           </button>
           <button
             type="button"
-            className={`icon-button ${activeSpecialistHub ? 'active-expert-icon' : ''}`}
+            className={`icon-button ${panelCount > 0 ? 'active-expert-icon' : ''}`}
             onClick={onOpenSpecialistPicker}
-            title={activeSpecialistHub ? `Active Expert: ${activeSpecialistHub.name}` : 'AI Experts on Hand'}
+            title={
+              panelCount > 0
+                ? `Consulting ${panelCount} expert${panelCount === 1 ? '' : 's'}: ${activeSpecialistHubs.map((h) => h.name).join(', ')}`
+                : 'AI Experts on Hand'
+            }
           >
-            ⚡
+            ⚡{panelCount > 0 ? <span className="icon-badge">{panelCount}</span> : null}
           </button>
           <button
             type="button"

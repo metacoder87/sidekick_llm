@@ -12,11 +12,13 @@ export default function SpecialistPickerModal({
   isOpen,
   onClose,
   sidekick,
-  activeSpecialistId,
+  activeSpecialistIds = [],
   onSelectSpecialist,
   onOpenCreateModal,
   onOpenEditModal,
 }) {
+  const isSelected = (id) => activeSpecialistIds.includes(id);
+  const noneSelected = activeSpecialistIds.length === 0;
   const [hubs, setHubs] = useState([]);
 
   async function loadHubs() {
@@ -42,8 +44,8 @@ export default function SpecialistPickerModal({
     if (!accepted) return;
 
     await sidekick.specialist.delete(hubId);
-    if (activeSpecialistId === hubId) {
-      onSelectSpecialist(null);
+    if (isSelected(hubId)) {
+      onSelectSpecialist(hubId); // toggles it out of the panel
     }
     await loadHubs();
   }
@@ -62,38 +64,37 @@ export default function SpecialistPickerModal({
         </div>
 
         <p className="modal-description">
-          Select an active AI Specialist to restrict context search to its dedicated vector vault and apply domain expert instructions.
+          Select one or more AI Specialists to consult. Each selected expert's dedicated vault is searched and its domain instructions applied — build a whole panel to consult at once. Click to toggle; changes apply immediately.
         </p>
 
         <div className="specialist-grid">
           <div
-            className={`specialist-grid-card ${!activeSpecialistId ? 'active' : ''}`}
-            onClick={() => {
-              onSelectSpecialist(null);
-              onClose();
-            }}
+            className={`specialist-grid-card ${noneSelected ? 'active' : ''}`}
+            onClick={() => onSelectSpecialist(null)}
           >
             <span className="specialist-grid-card__icon">🤖</span>
             <div className="specialist-grid-card__body">
               <strong>General Assistant</strong>
-              <small>Default local LLM reasoning</small>
+              <small>No experts — default local LLM reasoning</small>
             </div>
-            {!activeSpecialistId ? <span className="active-pill">ACTIVE</span> : null}
+            {noneSelected ? <span className="active-pill">ACTIVE</span> : null}
           </div>
 
           {hubs.map((hub) => (
             <div
               key={hub.id}
-              className={`specialist-grid-card ${activeSpecialistId === hub.id ? 'active' : ''}`}
-              onClick={() => {
-                onSelectSpecialist(hub.id);
-                onClose();
-              }}
+              className={`specialist-grid-card ${isSelected(hub.id) ? 'active' : ''}`}
+              onClick={() => onSelectSpecialist(hub.id)}
             >
               <span className="specialist-grid-card__icon">{ICON_MAP[hub.icon] || '🧠'}</span>
               <div className="specialist-grid-card__body">
                 <strong>{hub.name}</strong>
-                <small>{hub.chunkCount || 0} vector chunks</small>
+                <small>
+                  {hub.chunkCount || 0} chunks
+                  {typeof hub.retrievableChunkCount === 'number' && hub.retrievableChunkCount < hub.chunkCount
+                    ? ` · ⚠️ ${hub.retrievableChunkCount} retrievable`
+                    : ''}
+                </small>
               </div>
               <div className="specialist-grid-card__actions">
                 <button
@@ -116,7 +117,7 @@ export default function SpecialistPickerModal({
                   ✕
                 </button>
               </div>
-              {activeSpecialistId === hub.id ? <span className="active-pill">ACTIVE</span> : null}
+              {isSelected(hub.id) ? <span className="active-pill">CONSULTING</span> : null}
             </div>
           ))}
         </div>
@@ -124,13 +125,16 @@ export default function SpecialistPickerModal({
         <div className="modal-actions">
           <button
             type="button"
-            className="primary-button"
+            className="secondary-button"
             onClick={() => {
               onClose();
               onOpenCreateModal();
             }}
           >
             + Create New AI Specialist Hub
+          </button>
+          <button type="button" className="primary-button" onClick={onClose}>
+            Done{activeSpecialistIds.length > 0 ? ` (${activeSpecialistIds.length} consulting)` : ''}
           </button>
         </div>
       </div>
