@@ -301,33 +301,43 @@ with an explicit **exit criterion** — do not advance until it's met.
       into the migration runner when Phase 1 adds the embedding-provenance columns.
 
 #### Phase 0 — Prerequisites
-- [ ] `ollama pull nomic-embed-text` (768-dim, ~274 MB, ~10× faster than embedding
-      through a 32B). Document this as a first-run requirement. **← NEXT: run this,
-      it gates all of Phase 1.**
+- [x] `ollama pull nomic-embed-text` — done by the author; verified 768-dim live.
 - [x] Delete duplicate repository block (was `:614-727`) — removed in commit 367255c.
 
-#### Phase 1 — The embedding contract (root-cause fix)
-- [ ] Add `embeddingModel: 'nomic-embed-text'` to `DEFAULT_SETTINGS`
-      ([`repository.cjs:5`](electron/repository.cjs)). **Decouple from chat model.**
-- [ ] Every embed call site reads `embeddingModel`, NOT the active chat model:
-      [`ipc.cjs:308`](electron/ipc.cjs), [`memoryManager.cjs:24,182`](electron/memory/memoryManager.cjs),
-      [`deepResearch.cjs:58,116,166`](electron/research/deepResearch.cjs).
-- [ ] Migrate `specialist_chunks` + `message_embeddings`: add
-      `embedding_model TEXT`, `embedding_dim INTEGER`. Filter on both at query time.
-- [ ] `saveSpecialistChunk` / `saveMessageEmbedding` **throw** on empty/non-finite
-      vector — the write-boundary enforcement (invariant #4).
-- [ ] `generateEmbedding` returns a discriminated result
-      (`{ok, embedding, dim}` | `{ok:false, reason}`) so callers know *why* it failed
-      ([`ollama.cjs:139`](electron/ollama.cjs)).
-- [ ] Store vectors as `Float32Array` BLOBs (not JSON) — perf + correctness.
+#### Phase 1 — The embedding contract (root-cause fix) ✅ DONE (commit 21f8931)
+- [x] Added `embeddingModel: 'nomic-embed-text'` to `DEFAULT_SETTINGS`, decoupled
+      from the chat model. Reasoning model stays the user's free choice (invariant #5).
+- [x] Every embed site routes through the pinned embedding model: ipc chat RAG +
+      memory retrieve/index, deepResearch ingest + web. (`model` still used for the
+      chat/summary/extract completions.)
+- [x] Schema **v2** migration adds `embedding_model` + `embedding_dim` to both
+      `specialist_chunks` and `message_embeddings` (defensive `addColumnIfMissing`;
+      fresh DBs get them in CREATE TABLE). `SCHEMA_VERSION` drift guard added.
+- [x] Retrieval filters by dimension → mismatched/legacy (NULL-dim) vectors are
+      excluded, not scored 0.
+- [x] `saveSpecialistChunk`/`saveMessageEmbedding` throw on empty/non-finite via
+      `assertValidEmbedding`; ingest loops skip + count failures (`chunksFailed`) and
+      fail honestly if nothing embeds. Export/import carry the new columns.
+- [x] **Verified live** against real Ollama: PDF ingested with nomic-embed-text is
+      retrievable; the old chat-model query path (4096-d vs 768-d) returns 0 by
+      exclusion. Real user DB migrated v0→v2 on launch with an automatic backup.
+- **Deferred (intentional):** discriminated `generateEmbedding` result → Phase 3
+  (its "reason" is consumed by the pre-flight there); `Float32Array` BLOB storage
+  → Phase 5 perf (would churn the just-verified export/import). Legacy NULL-dim
+  rows await Phase 4 re-index.
 
-#### Phase 2 — Fix PDF ingestion (independent; can parallel Phase 1/3)
-- [ ] Swap to the v2 `PDFParse` class API + `parser.destroy()` (see §2.1).
-- [ ] Empty extracted text (scanned/image PDF) → report *"no extractable text —
-      appears to be scanned"*, NOT a successful 0-chunk ingest.
-- [ ] `scrapePage` returns `null` for non-HTML content-types
-      ([`scraper.cjs:52`](electron/search/scraper.cjs)) → PDFs *linked from* research
-      are silently skipped. Decide: fetch+parse linked PDFs, or explicitly report skip.
+#### Phase 2 — Fix PDF ingestion ✅ DONE (commit 6d392fb)
+- [x] Swapped to the v2 `PDFParse` class API + guaranteed `parser.destroy()`.
+- [x] Guard on **chunks produced** (stronger than raw-text): scanned/image/empty
+      files return `{success:false, reason}`, never a silent 0-chunk success.
+- [ ] `scrapePage` non-HTML skip (PDFs linked from web research) — **deferred**,
+      minor; upload path is the primary flow. Revisit with Stage 3 research work.
+
+**Build fix found during Phase 1 verification** ✅ (commit 33a1b1f): the production
+build rendered a blank/black window — Vite emitted absolute `/assets/...` paths that
+Electron's `file://` loader resolves to the filesystem root. Set `base:'./'`; verified
+the built page mounts under `file://`. Dev mode had masked this; it would have blocked
+Stage 4 packaging.
 
 #### Phase 3 — Honest reporting (kills silent-success permanently)
 - [ ] Worker returns `{chunksAttempted, chunksIndexed, chunksFailed,
