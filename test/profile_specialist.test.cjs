@@ -1,8 +1,37 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const { ConversationRepository } = require('../electron/repository.cjs');
-const { chunkText } = require('../electron/research/deepResearch.cjs');
+const { chunkText, DeepResearchWorker } = require('../electron/research/deepResearch.cjs');
+
+// Minimal but valid single-page PDF with the given text and correct xref offsets.
+function buildPdf(text) {
+  const header = '%PDF-1.4\n';
+  const stream = `BT /F1 24 Tf 72 700 Td (${text}) Tj ET`;
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  let body = '';
+  const offsets = [];
+  let pos = header.length;
+  objects.forEach((obj, i) => {
+    offsets[i] = pos;
+    const chunk = `${i + 1} 0 obj\n${obj}\nendobj\n`;
+    body += chunk;
+    pos += chunk.length;
+  });
+  let xref = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets) xref += `${String(off).padStart(10, '0')} 00000 n \n`;
+  const trailer = `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${pos}\n%%EOF`;
+  return Buffer.from(header + body + xref + trailer, 'latin1');
+}
 
 test('repository handles user profile get and set operations', () => {
   const repository = new ConversationRepository(':memory:');
@@ -72,4 +101,48 @@ test('deepResearch chunkText splits large text into overlapping chunks', () => {
 
   assert.ok(chunks.length > 1);
   assert.ok(chunks[0].includes('Alpha'));
+});
+
+test('deepResearch extracts text from a real PDF and indexes it (pdf-parse v2 API)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sk-pdf-'));
+  try {
+    const known = 'Sidekick PDF Ingestion Regression Fixture';
+    const pdfPath = path.join(dir, 'fixture.pdf');
+    fs.writeFileSync(pdfPath, buildPdf(known));
+
+    const saved = [];
+    const repository = { saveSpecialistChunk: (c) => saved.push(c) };
+    const ollama = { generateEmbedding: async () => new Array(768).fill(0.01) };
+    const worker = new DeepResearchWorker({ repository, ollama });
+
+    const result = await worker.ingestFilePath({ hubId: 'h1', filePath: pdfPath, model: 'nomic-embed-text' });
+
+    assert.equal(result.success, true);
+    assert.ok(result.chunksCount >= 1);
+    assert.ok(saved.map((c) => c.chunkText).join(' ').includes(known));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('deepResearch reports a scanned/empty PDF as failure, never silent 0-chunk success', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sk-pdf-'));
+  try {
+    const pdfPath = path.join(dir, 'scanned.pdf');
+    fs.writeFileSync(pdfPath, buildPdf('')); // valid PDF, no extractable text
+
+    const saved = [];
+    const repository = { saveSpecialistChunk: (c) => saved.push(c) };
+    const ollama = { generateEmbedding: async () => new Array(768).fill(0.01) };
+    const worker = new DeepResearchWorker({ repository, ollama });
+
+    const result = await worker.ingestFilePath({ hubId: 'h1', filePath: pdfPath, model: 'nomic-embed-text' });
+
+    assert.equal(result.success, false);
+    assert.equal(result.chunksCount, 0);
+    assert.match(result.reason, /scanned|image-only|readable/i);
+    assert.equal(saved.length, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

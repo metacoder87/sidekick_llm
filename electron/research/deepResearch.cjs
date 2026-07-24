@@ -1,6 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const pdfParse = require('pdf-parse');
+const { PDFParse } = require('pdf-parse');
 const { scrapePage } = require('../search/scraper.cjs');
 const { searchDuckDuckGo } = require('../search/searchService.cjs');
 
@@ -35,14 +35,33 @@ class DeepResearchWorker {
     onProgress({ status: 'reading_file', message: `Reading ${title}...` });
 
     if (ext === '.pdf') {
+      // pdf-parse v2 exposes a PDFParse class (the v1 callable default no longer
+      // exists). The pdfjs worker it spins up must be destroyed or it leaks.
       const buffer = await fs.readFile(filePath);
-      const pdfData = await pdfParse(buffer);
-      fullText = pdfData.text || '';
+      const parser = new PDFParse({ data: buffer });
+      try {
+        const result = await parser.getText();
+        fullText = result.text || '';
+      } finally {
+        await parser.destroy();
+      }
     } else {
       fullText = await fs.readFile(filePath, 'utf8');
     }
 
     const chunks = chunkText(fullText);
+
+    // No indexable chunks means nothing was actually learned — whether the file
+    // was empty, scanned/image-only, or too short. Report a clear failure instead
+    // of "successfully ingested 0 chunks" (ROADMAP §5 Phase 2 — no silent success).
+    if (chunks.length === 0) {
+      const reason =
+        ext === '.pdf'
+          ? 'No indexable text found — this PDF appears to be scanned or image-only. Try an OCR-processed copy.'
+          : 'The selected file did not contain enough readable text to index.';
+      onProgress({ status: 'error', message: reason });
+      return { success: false, reason, chunksCount: 0 };
+    }
     onProgress({
       status: 'embedding',
       message: `Extracted ${chunks.length} chunks. Generating embeddings...`,
