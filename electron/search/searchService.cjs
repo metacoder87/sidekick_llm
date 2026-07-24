@@ -91,6 +91,26 @@ async function searchDuckDuckGo(query, maxResults = 5) {
   return results;
 }
 
+// Wikipedia's search API is a stable JSON endpoint (no HTML scraping to break),
+// which makes it a reliable last-resort fallback when the configured provider
+// returns nothing or is rate-limiting.
+async function searchWikipedia(query, maxResults = 5) {
+  if (!query || !query.trim()) return [];
+  const endpoint = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*`;
+  try {
+    const response = await fetch(endpoint, { headers: { 'User-Agent': USER_AGENT } });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return (data.query?.search || []).slice(0, maxResults).map((item) => ({
+      title: item.title,
+      url: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replace(/ /g, '_'))}`,
+      snippet: decodeHtmlEntities(cleanText(item.snippet || '')),
+    }));
+  } catch (_e) {
+    return [];
+  }
+}
+
 async function searchSearXNG(query, baseUrl, maxResults = 5) {
   if (!baseUrl) {
     throw new Error('SearXNG URL is not configured.');
@@ -170,29 +190,56 @@ async function searchBrave(query, apiKey, maxResults = 5) {
   }));
 }
 
+// Runs the configured provider, then falls back so a single provider hiccup
+// (rate-limit, markup change, missing key) never zeroes out a run. Never throws:
+// returns [] only when every provider genuinely found nothing.
 async function performWebSearch({ query, provider = 'duckduckgo', options = {} }) {
   if (!query || !query.trim()) {
     return [];
   }
 
   const cleanQuery = query.trim();
+  const max = options.maxResults || 5;
 
-  switch (provider.toLowerCase()) {
-    case 'searxng':
-      return searchSearXNG(cleanQuery, options.searxngUrl, options.maxResults || 5);
-    case 'tavily':
-      return searchTavily(cleanQuery, options.tavilyApiKey, options.maxResults || 5);
-    case 'brave':
-      return searchBrave(cleanQuery, options.braveApiKey, options.maxResults || 5);
-    case 'duckduckgo':
-    default:
-      return searchDuckDuckGo(cleanQuery, options.maxResults || 5);
+  const runProvider = async (name) => {
+    try {
+      switch (name) {
+        case 'searxng':
+          return await searchSearXNG(cleanQuery, options.searxngUrl, max);
+        case 'tavily':
+          return await searchTavily(cleanQuery, options.tavilyApiKey, max);
+        case 'brave':
+          return await searchBrave(cleanQuery, options.braveApiKey, max);
+        case 'duckduckgo':
+        default:
+          return await searchDuckDuckGo(cleanQuery, max);
+      }
+    } catch (_e) {
+      return [];
+    }
+  };
+
+  // 1. The user's configured provider.
+  let results = await runProvider(provider.toLowerCase());
+
+  // 2. DuckDuckGo as a keyless fallback (skip if it was already the primary).
+  if (results.length === 0 && provider.toLowerCase() !== 'duckduckgo') {
+    results = await runProvider('duckduckgo');
   }
+
+  // 3. Wikipedia as a stable last resort so research always has something to work
+  //    with rather than failing outright.
+  if (results.length === 0) {
+    results = await searchWikipedia(cleanQuery, max);
+  }
+
+  return results;
 }
 
 module.exports = {
   performWebSearch,
   searchDuckDuckGo,
+  searchWikipedia,
   searchSearXNG,
   searchTavily,
   searchBrave,

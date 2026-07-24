@@ -2,7 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { PDFParse } = require('pdf-parse');
 const { scrapePage } = require('../search/scraper.cjs');
-const { searchDuckDuckGo } = require('../search/searchService.cjs');
+const { performWebSearch } = require('../search/searchService.cjs');
 
 function chunkText(text, chunkSize = 800, overlap = 150) {
   if (!text) return [];
@@ -22,9 +22,11 @@ function chunkText(text, chunkSize = 800, overlap = 150) {
 }
 
 class DeepResearchWorker {
-  constructor({ repository, ollama }) {
+  constructor({ repository, ollama, search = performWebSearch }) {
     this.repository = repository;
     this.ollama = ollama;
+    // Injectable so the search/fallback orchestration can be tested without network.
+    this.search = search;
   }
 
   async ingestFilePath({ hubId, filePath, model, embeddingModel, onProgress = () => {} }) {
@@ -123,22 +125,70 @@ class DeepResearchWorker {
     return { success: true, chunksCount: indexed, chunksFailed: failed };
   }
 
-  async runWebDeepResearch({ hubId, topic, seedUrls = [], depth = 1, model, embeddingModel, onProgress = () => {} }) {
+  async runWebDeepResearch({ hubId, topic, seedUrls = [], depth = 1, model, embeddingModel, searchOptions = {}, onProgress = () => {} }) {
     const embedModel = embeddingModel || model;
-    onProgress({ status: 'searching', message: `Initializing research for "${topic}"...` });
+    onProgress({ status: 'searching', message: `Searching the web for "${topic}"...` });
+
+    let totalChunks = 0;
+    let totalFailed = 0;
+
+    // Helper: embed a piece of text and store it as a vault chunk; returns true on
+    // success. Centralizes the write-boundary handling used everywhere below.
+    const indexChunk = async ({ sourceTitle, sourceUrl, chunkText: text }) => {
+      let embedding = null;
+      try {
+        embedding = await this.ollama.generateEmbedding({ model: embedModel, input: text });
+      } catch (_e) {
+        embedding = null;
+      }
+      if (!Array.isArray(embedding) || embedding.length === 0) {
+        totalFailed++;
+        return false;
+      }
+      this.repository.saveSpecialistChunk({ hubId, sourceTitle, sourceUrl, chunkText: text, embedding, embeddingModel: embedModel });
+      totalChunks++;
+      return true;
+    };
 
     let targetUrls = [...seedUrls];
+    const trimmedTopic = (topic || '').trim();
+    const topicIsUrl = /^https?:\/\//i.test(trimmedTopic) || /^www\./i.test(trimmedTopic);
 
-    if (topic && topic.trim()) {
-      try {
-        const searchResults = await searchDuckDuckGo(topic, 5);
-        for (const res of searchResults) {
-          if (res.url && !targetUrls.includes(res.url)) {
-            targetUrls.push(res.url);
-          }
+    if (topicIsUrl) {
+      const formatted = /^https?:\/\//i.test(trimmedTopic) ? trimmedTopic : `https://${trimmedTopic}`;
+      if (!targetUrls.includes(formatted)) targetUrls.push(formatted);
+    } else if (trimmedTopic) {
+      // Route through performWebSearch so the user's configured provider is honored
+      // and the built-in fallback chain (DuckDuckGo → Wikipedia) applies.
+      const searchResults = await this.search({
+        query: trimmedTopic,
+        provider: searchOptions.provider || 'duckduckgo',
+        options: {
+          searxngUrl: searchOptions.searxngUrl,
+          tavilyApiKey: searchOptions.tavilyApiKey,
+          braveApiKey: searchOptions.braveApiKey,
+          maxResults: 6,
+        },
+      });
+
+      for (const res of searchResults) {
+        if (res.url && !targetUrls.includes(res.url)) targetUrls.push(res.url);
+        // Index the result snippet directly. This guarantees the run yields
+        // knowledge even if every page later fails to scrape (unreachable/blocked).
+        if (res.snippet && res.snippet.length > 40) {
+          await indexChunk({
+            sourceTitle: `Snippet: ${res.title || res.url}`,
+            sourceUrl: res.url,
+            chunkText: `${res.title}\n${res.snippet}`,
+          });
         }
-      } catch (_e) {
-        // Search fallback
+      }
+
+      // No sources at all — a distinct, actionable failure (not an embedding issue).
+      if (targetUrls.length === 0) {
+        const reason = `Web search returned no sources for "${trimmedTopic}". Try different keywords, paste a direct URL as the topic, or configure a search provider (Tavily/Brave) in Settings → Web Search.`;
+        onProgress({ status: 'error', message: reason });
+        return { success: false, reason, totalChunks: 0, totalFailed };
       }
     }
 
@@ -149,8 +199,6 @@ class DeepResearchWorker {
       current: 0,
     });
 
-    let totalChunks = 0;
-    let totalFailed = 0;
     let urlIndex = 0;
 
     for (const url of targetUrls) {
@@ -172,37 +220,18 @@ class DeepResearchWorker {
         // Fallback title
       }
 
-      const chunks = chunkText(pageText);
-      for (const chunk of chunks) {
-        let embedding = null;
-        try {
-          embedding = await this.ollama.generateEmbedding({ model: embedModel, input: chunk });
-        } catch (_e) {
-          embedding = null;
-        }
-
-        // Skip chunks that could not be embedded — a dead vector is unretrievable
-        // and the write boundary would reject it (invariant #4).
-        if (!Array.isArray(embedding) || embedding.length === 0) {
-          totalFailed++;
-          continue;
-        }
-
-        this.repository.saveSpecialistChunk({
-          hubId,
-          sourceTitle: `Web: ${title}`,
-          sourceUrl: url,
-          chunkText: chunk,
-          embedding,
-          embeddingModel: embedModel,
-        });
-
-        totalChunks++;
+      for (const chunk of chunkText(pageText)) {
+        await indexChunk({ sourceTitle: `Web: ${title}`, sourceUrl: url, chunkText: chunk });
       }
     }
 
     if (totalChunks === 0) {
-      const reason = `Scraped ${targetUrls.length} sources but indexed nothing — check that the embedding model "${embedModel}" is installed and supports embeddings, or that sources were reachable.`;
+      // We had sources (snippets and/or URLs) but none produced an indexed chunk.
+      // Separate the likely causes so the message is actionable.
+      const reason =
+        totalFailed > 0
+          ? `Found ${targetUrls.length} sources but could not embed any content — check that the embedding model "${embedModel}" is installed and supports embeddings.`
+          : `Found ${targetUrls.length} sources but none returned readable content — the pages may be unreachable, blocked, or non-HTML. Check your connection or try a direct URL.`;
       onProgress({ status: 'error', message: reason });
       return { success: false, reason, totalChunks: 0, totalFailed };
     }

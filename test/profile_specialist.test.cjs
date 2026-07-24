@@ -157,6 +157,37 @@ test('reindexHub re-embeds stale/legacy chunks so they become retrievable', asyn
   repository.close();
 });
 
+test('runWebDeepResearch reports an honest failure when search finds no sources', async () => {
+  const saved = [];
+  const repository = { saveSpecialistChunk: (c) => saved.push(c) };
+  const ollama = { generateEmbedding: async () => new Array(768).fill(0.01) };
+  // Inject a searcher that finds nothing (simulates every provider empty).
+  const worker = new DeepResearchWorker({ repository, ollama, search: async () => [] });
+
+  const res = await worker.runWebDeepResearch({ hubId: 'h', topic: 'an extremely obscure topic', embeddingModel: 'nomic-embed-text' });
+
+  assert.equal(res.success, false);
+  assert.match(res.reason, /no sources/i);
+  assert.equal(res.totalChunks, 0);
+  assert.equal(saved.length, 0);
+});
+
+test('runWebDeepResearch indexes search snippets so unreachable pages do not zero the run', async () => {
+  const saved = [];
+  const repository = { saveSpecialistChunk: (c) => saved.push(c) };
+  const ollama = { generateEmbedding: async () => new Array(768).fill(0.01) };
+  // One result with a usable snippet but a URL that refuses instantly (local, no
+  // network): the page scrape fails, yet the snippet still gets indexed.
+  const search = async () => [{ title: 'Photosynthesis', url: 'http://127.0.0.1:9/x', snippet: 'Photosynthesis converts light into chemical energy in plants.' }];
+  const worker = new DeepResearchWorker({ repository, ollama, search });
+
+  const res = await worker.runWebDeepResearch({ hubId: 'h', topic: 'photosynthesis', embeddingModel: 'nomic-embed-text' });
+
+  assert.equal(res.success, true);
+  assert.ok(res.totalChunks >= 1);
+  assert.ok(saved.some((c) => /^Snippet:/.test(c.sourceTitle)));
+});
+
 test('deepResearch extracts text from a real PDF and indexes it (pdf-parse v2 API)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sk-pdf-'));
   try {
