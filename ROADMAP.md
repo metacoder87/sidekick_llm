@@ -412,11 +412,15 @@ quality is the ceiling on everything; this stage raises it.*
 - [ ] **Contradiction/absence handling** — hardest retrieval problem, central to the
       second-opinion use case. A contradiction is *semantically similar* to what it
       contradicts; similarity alone won't find it. Needs explicit design.
-- [ ] **Memory that compounds** (fixes the degradation bug):
-      - dedup on insert; supersede-on-contradiction;
-      - relevance-ranked retrieval, not `slice(0,10)` by recency;
-      - editable auto-extracted facts;
-      - decay/staleness.
+- [~] **Memory that compounds** (fixes the degradation bug) — CORE DONE:
+      - [x] dedup on insert (canonical-form match refreshes instead of duplicating);
+      - [x] relevance-ranked retrieval (`rankMemoriesByRelevance`), not `slice(0,10)`
+            by recency;
+      - [ ] supersede-on-contradiction (needs LLM/semantic detection — deferred);
+      - [ ] editable auto-extracted facts (add/delete exist in the Memory Vault UI;
+            inline edit still TODO);
+      - [ ] decay/staleness. *Verified live: 5 adds w/ 2 dups → 3 stored; relevant
+            fact outranks recent one.*
 - [ ] **Model routing** implemented (invariant #5).
 - [ ] **Notes as first-class objects.** User- or model-authored, attached to an
       Expert, themselves embedded + retrievable. NotebookLM's most-loved feature;
