@@ -279,27 +279,32 @@ with an explicit **exit criterion** — do not advance until it's met.
 ### STAGE 1 — Trustworthy foundation  (~3 weeks)
 *Goal: the corpus is safe, honest, portable, and its knowledge is actually retrievable.*
 
-#### Phase −1 — Protect the corpus (do this FIRST, before any schema change)
-- [ ] **Schema versioning.** Introduce `PRAGMA user_version` (or a `_meta` table).
-      Write a real migration runner: ordered, idempotent, logged, transactional.
-      Replace the swallowing `catch{}` ad-hoc `ALTER` at
-      [`repository.cjs:186`](electron/repository.cjs).
-- [ ] **Backup-before-migrate.** On version bump, copy `sidekick.db` →
-      `sidekick.db.bak-<version>-<timestamp>` before running migrations. Keep last N.
-- [ ] **Integrity check on open.** `PRAGMA integrity_check`; surface failure in UI
-      rather than crashing silently.
-- [ ] **Full export/import.** Extend `exportAll` to include memories, profile,
-      Specialist hubs, AND vault chunks. Add matching import. Version the export
-      envelope (`{schemaVersion, exportedAt, ...}`). This is also the foundation
-      for portable/starter Experts (invariant #3).
-- [ ] **Test:** migrate an old DB → data intact + backup created; export → import
-      into empty DB → byte-for-corpus-equivalent.
-- **Exit:** a bad migration can never destroy the corpus; the whole corpus round-trips.
+#### Phase −1 — Protect the corpus (do this FIRST, before any schema change) ✅ DONE (commit 367255c)
+- [x] **Schema versioning.** `PRAGMA user_version` + ordered, transactional
+      migration runner (`SCHEMA_VERSION`, `MIGRATIONS`, `runMigrations()`).
+      Migration 1 is the idempotent baseline for fresh + legacy databases.
+- [x] **Backup-before-migrate.** WAL-checkpoint then copy to
+      `<db>.bak-v<from>-<timestamp>` before migrating a database that holds data;
+      keeps most recent `MAX_BACKUPS` (5). `backupDatabase()` / `pruneBackups()`.
+- [x] **Integrity check on open.** `checkIntegrity()` runs `PRAGMA integrity_check`;
+      result stored on `repository.integrity`, exposed via `system:getIntegrity`,
+      surfaced in the renderer as a warning banner (App.jsx bootstrap).
+- [x] **Full export/import.** `exportAll()` emits the full corpus (conversations+
+      messages, memories, profile, hubs + vault chunks) in a versioned envelope
+      (`app`/`kind`/`schemaVersion`). `importAll()` restores transactionally +
+      idempotently (INSERT OR IGNORE). Wired `chat:importAll` + sidebar buttons.
+- [x] **Test:** legacy-backup-on-migrate (data intact + backup created) and full
+      export→import round-trip (incl. embedding fidelity + idempotency). Suite 11→14.
+- **Exit:** ✅ a bad migration can't destroy the corpus; the whole corpus round-trips.
+- **Deferred to Phase 1:** the ad-hoc `ALTER TABLE summary` at
+      [`repository.cjs`](electron/repository.cjs) `initialize()` still exists; fold it
+      into the migration runner when Phase 1 adds the embedding-provenance columns.
 
 #### Phase 0 — Prerequisites
 - [ ] `ollama pull nomic-embed-text` (768-dim, ~274 MB, ~10× faster than embedding
-      through a 32B). Document this as a first-run requirement.
-- [ ] Delete duplicate repository block [`:614-727`](electron/repository.cjs).
+      through a 32B). Document this as a first-run requirement. **← NEXT: run this,
+      it gates all of Phase 1.**
+- [x] Delete duplicate repository block (was `:614-727`) — removed in commit 367255c.
 
 #### Phase 1 — The embedding contract (root-cause fix)
 - [ ] Add `embeddingModel: 'nomic-embed-text'` to `DEFAULT_SETTINGS`
