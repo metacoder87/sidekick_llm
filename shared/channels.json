@@ -17,7 +17,11 @@
     "sendMessageStream": "chat:sendMessageStream",
     "cancelGeneration": "chat:cancelGeneration",
     "exportConversation": "chat:exportConversation",
-    "exportAll": "chat:exportAll"
+    "exportAll": "chat:exportAll",
+    "importAll": "chat:importAll"
+  },
+  "system": {
+    "getIntegrity": "system:getIntegrity"
   },
   "settings": {
     "get": "settings:get",
@@ -37,7 +41,8 @@
     "get": "specialist:get",
     "create": "specialist:create",
     "update": "specialist:update",
-    "delete": "specialist:delete"
+    "delete": "specialist:delete",
+    "reindex": "specialist:reindex"
   },
   "research": {
     "start": "research:start",

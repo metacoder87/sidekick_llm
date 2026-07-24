@@ -93,6 +93,22 @@ function registerIpcHandlers({ userDataPath }) {
     return { success };
   });
 
+  ipcMain.handle(channels.specialist.reindex, async (event, { hubId }) => {
+    const embeddingModel = repository.getSetting('embeddingModel');
+    const preflight = await ollama.checkEmbedding(embeddingModel);
+    if (!preflight.ok) {
+      return { success: false, reason: preflight.reason };
+    }
+
+    return researchWorker.reindexHub({
+      hubId,
+      embeddingModel,
+      onProgress: (progress) => {
+        event.sender.send(channels.events.researchProgress, { hubId, ...progress });
+      },
+    });
+  });
+
   // Deep Research & Document Ingestion Handlers
   ipcMain.handle(channels.research.start, async (event, { hubId, topic, seedUrls, depth }) => {
     let model = repository.getSetting('activeModel');
@@ -103,12 +119,21 @@ function registerIpcHandlers({ userDataPath }) {
 
     const allSettings = repository.getAllSettings();
 
+    // Fail fast if embeddings won't work, before scraping the web for minutes.
+    const embeddingModel = repository.getSetting('embeddingModel');
+    const preflight = await ollama.checkEmbedding(embeddingModel);
+    if (!preflight.ok) {
+      return { success: false, reason: preflight.reason };
+    }
+
     return researchWorker.runWebDeepResearch({
       hubId,
       topic,
       seedUrls: seedUrls || [],
       depth: depth || 1,
-      model,
+      // Query decomposition is utility work — use the background model if set.
+      model: repository.getSetting('backgroundModel') || model,
+      embeddingModel,
       searchOptions: {
         provider: allSettings.searchProvider || 'duckduckgo',
         searxngUrl: allSettings.searxngUrl,
@@ -141,10 +166,18 @@ function registerIpcHandlers({ userDataPath }) {
       model = models[0]?.name || '';
     }
 
+    // Fail fast if embeddings won't work, before reading and chunking the file.
+    const embeddingModel = repository.getSetting('embeddingModel');
+    const preflight = await ollama.checkEmbedding(embeddingModel);
+    if (!preflight.ok) {
+      return { success: false, reason: preflight.reason };
+    }
+
     return researchWorker.ingestFilePath({
       hubId,
       filePath,
       model,
+      embeddingModel,
       onProgress: (progress) => {
         event.sender.send(channels.events.researchProgress, { hubId, ...progress });
       },
@@ -223,6 +256,13 @@ function registerIpcHandlers({ userDataPath }) {
       throw new Error('No Ollama models are available.');
     }
 
+    // Embeddings use the dedicated embedding model regardless of the chat model,
+    // so vector dimensions stay stable across chat-model switches (invariant #5).
+    const embeddingModel = repository.getSetting('embeddingModel');
+    // Background/utility LLM work (summaries, fact extraction) runs on the optional
+    // background model, falling back to the chat model when none is configured.
+    const backgroundModel = repository.getSetting('backgroundModel') || model;
+
     // Check Settings
     const allSettings = repository.getAllSettings();
     const isWebSearchEnabled =
@@ -289,6 +329,7 @@ function registerIpcHandlers({ userDataPath }) {
         query: content,
         currentConversationId: conversation.id,
         model,
+        embeddingModel,
       });
     } catch (memErr) {
       console.error('Memory Retrieval Error:', memErr.message);
@@ -298,25 +339,58 @@ function registerIpcHandlers({ userDataPath }) {
     const userProfile = repository.getUserProfile();
     const profileContext = `\n[USER PROFILE & SYSTEM PREFERENCES]\n- User Name: ${userProfile.name}\n- User Role: ${userProfile.role}\n- Tech Stack: ${userProfile.stack}\n- Preferred Response Tone: ${userProfile.tone}\n- Global System Instructions: ${userProfile.instructions}\n`;
 
-    // 4. Retrieve Specialist RAG Context if an Active Specialist Hub is selected
-    let specialistContext = '';
-    if (payload.activeSpecialistId) {
-      try {
-        const hub = repository.getSpecialistHub(payload.activeSpecialistId);
-        if (hub) {
-          let specialistRag = '';
-          const queryEmbedding = await ollama.generateEmbedding({ model, input: content });
-          if (queryEmbedding && queryEmbedding.length > 0) {
-            const matches = repository.searchSpecialistVectorMemory(hub.id, queryEmbedding, 4);
-            if (matches && matches.length > 0) {
-              const chunkLines = matches.map(
-                (m) => `[Source (${m.sourceTitle})]: "${m.chunkText}"`,
-              );
-              specialistRag = `\n[SPECIALIST KNOWLEDGE VAULT: ${hub.name}]\n${chunkLines.join('\n\n')}`;
-            }
-          }
+    // 4. Retrieve Specialist RAG context. Supports a PANEL of experts (federated
+    //    retrieval): the query is embedded once, each selected vault is searched,
+    //    and every expert's persona + matched knowledge is layered into the prompt.
+    //    Grounding is tracked per expert so the UI can flag persona-only answers
+    //    (invariant #1 — a persona speaking from model weights must never look like
+    //    a grounded, cited answer).
+    const activeSpecialistIds = Array.isArray(payload.activeSpecialistIds)
+      ? payload.activeSpecialistIds.filter(Boolean)
+      : payload.activeSpecialistId
+        ? [payload.activeSpecialistId]
+        : [];
 
-          specialistContext = `\n<specialist_role>\nYou are currently operating as an AI Specialist: ${hub.name}.\n${hub.description ? `Description: ${hub.description}\n` : ''}${hub.systemPrompt ? `Expert Instructions: ${hub.systemPrompt}\n` : ''}${specialistRag}\n</specialist_role>\n`;
+    let specialistContext = '';
+    let specialistGrounding = null;
+    if (activeSpecialistIds.length > 0) {
+      try {
+        const queryEmbedding = await ollama.generateEmbedding({ model: embeddingModel, input: content });
+        const consulted = [];
+        const roleBlocks = [];
+        let totalMatches = 0;
+
+        for (const specialistId of activeSpecialistIds) {
+          const hub = repository.getSpecialistHub(specialistId);
+          if (!hub) continue;
+
+          let matches = [];
+          if (queryEmbedding && queryEmbedding.length > 0) {
+            matches = repository.searchSpecialistVectorMemory(hub.id, queryEmbedding, 4, embeddingModel) || [];
+          }
+          totalMatches += matches.length;
+          consulted.push({ id: hub.id, name: hub.name, matches: matches.length });
+
+          const knowledge = matches.length
+            ? `Relevant knowledge from this expert's vault:\n${matches
+                .map((m) => `[${hub.name} · ${m.sourceTitle}]: "${m.chunkText}"`)
+                .join('\n\n')}`
+            : `(No matching knowledge found in this expert's vault for this question — answer from expertise only, and say so.)`;
+
+          roleBlocks.push(
+            `### Expert: ${hub.name}\n${hub.description ? `${hub.description}\n` : ''}${hub.systemPrompt ? `Instructions: ${hub.systemPrompt}\n` : ''}${knowledge}`,
+          );
+        }
+
+        if (consulted.length > 0) {
+          const panelIntro =
+            consulted.length === 1
+              ? `You are operating as the AI Specialist "${consulted[0].name}".`
+              : `You are consulting a panel of ${consulted.length} AI Specialists: ${consulted
+                  .map((c) => c.name)
+                  .join(', ')}. Integrate their expertise; when experts would disagree, present the perspectives rather than flattening them.`;
+          specialistContext = `\n<specialist_panel>\n${panelIntro}\nWhen you use an expert's vault knowledge, cite the expert and source. Do not fabricate sources.\n\n${roleBlocks.join('\n\n')}\n</specialist_panel>\n`;
+          specialistGrounding = { experts: consulted, grounded: totalMatches > 0, matches: totalMatches };
         }
       } catch (specErr) {
         console.error('Specialist RAG Error:', specErr.message);
@@ -377,28 +451,31 @@ function registerIpcHandlers({ userDataPath }) {
           message: {
             ...assistantMessage,
             citations: citations.length > 0 ? citations : undefined,
+            specialistGrounding: specialistGrounding || undefined,
           },
           conversation: repository.getConversationSummary(conversation.id),
         });
 
-        // 4. Trigger Async Non-Blocking Background Memory Tasks
+        // 4. Trigger Async Non-Blocking Background Memory Tasks. Summarization and
+        //    fact extraction are utility work → run on the background model.
         Promise.allSettled([
           memoryManager.maybeUpdateRollingSummary({
             conversationId: conversation.id,
             messages: rawHistory,
-            model,
+            model: backgroundModel,
           }),
           memoryManager.extractAndSaveFacts({
             conversationId: conversation.id,
             userMessage: content,
             assistantMessage: assistantText,
-            model,
+            model: backgroundModel,
           }),
           memoryManager.indexMessageEmbedding({
             messageId: userMessage.id,
             conversationId: conversation.id,
             content,
             model,
+            embeddingModel,
           }),
         ]).catch(() => {
           // Ignore background task errors
@@ -449,6 +526,37 @@ function registerIpcHandlers({ userDataPath }) {
 
     await fs.writeFile(target.filePath, JSON.stringify(payload, null, 2), 'utf8');
     return { saved: true, filePath: target.filePath };
+  });
+
+  ipcMain.handle(channels.chat.importAll, async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Import Sidekick corpus (conversations, memory, experts)',
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+      properties: ['openFile'],
+    });
+
+    if (result.canceled || !result.filePaths[0]) {
+      return { imported: false, cancelled: true };
+    }
+
+    const raw = await fs.readFile(result.filePaths[0], 'utf8');
+    let payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch (_error) {
+      throw new Error('Selected file is not valid JSON.');
+    }
+
+    if (payload.app !== 'sidekick-llm' || payload.kind !== 'corpus-export') {
+      throw new Error('Selected file is not a Sidekick corpus export.');
+    }
+
+    const counts = repository.importAll(payload);
+    return { imported: true, counts, filePath: result.filePaths[0] };
+  });
+
+  ipcMain.handle(channels.system.getIntegrity, async () => {
+    return repository.integrity;
   });
 
   ipcMain.handle(channels.chat.exportAll, async () => {

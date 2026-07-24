@@ -28,6 +28,10 @@ contextBridge.exposeInMainWorld('sidekick', {
     cancelGeneration: (requestId) => ipcRenderer.invoke(channels.chat.cancelGeneration, requestId),
     exportConversation: (conversationId) => ipcRenderer.invoke(channels.chat.exportConversation, conversationId),
     exportAll: () => ipcRenderer.invoke(channels.chat.exportAll),
+    importAll: () => ipcRenderer.invoke(channels.chat.importAll),
+  },
+  system: {
+    getIntegrity: () => ipcRenderer.invoke(channels.system.getIntegrity),
   },
   settings: {
     get: () => ipcRenderer.invoke(channels.settings.get),
@@ -48,6 +52,7 @@ contextBridge.exposeInMainWorld('sidekick', {
     create: (hubData) => ipcRenderer.invoke(channels.specialist.create, hubData),
     update: (hubData) => ipcRenderer.invoke(channels.specialist.update, hubData),
     delete: (id) => ipcRenderer.invoke(channels.specialist.delete, id),
+    reindex: (hubId) => ipcRenderer.invoke(channels.specialist.reindex, { hubId }),
   },
   research: {
     start: (payload) => ipcRenderer.invoke(channels.research.start, payload),

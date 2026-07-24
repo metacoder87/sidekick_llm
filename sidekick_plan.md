@@ -1,5 +1,9 @@
 # Sidekick LLM Architectural Plan & Engineering Specifications
 
+> **Note (historical):** This is the original design sketch. For the architecture
+> **as currently built**, see [ARCHITECTURE.md](ARCHITECTURE.md); for direction and
+> status see [ROADMAP.md](ROADMAP.md). This file is retained for design context.
+
 ## System Architecture
 
 Sidekick LLM is an offline-first desktop platform combining local model inference, real-time web search grounding, personalized memory, and domain-specific Specialist Knowledge Hubs.

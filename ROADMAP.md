@@ -279,70 +279,94 @@ with an explicit **exit criterion** — do not advance until it's met.
 ### STAGE 1 — Trustworthy foundation  (~3 weeks)
 *Goal: the corpus is safe, honest, portable, and its knowledge is actually retrievable.*
 
-#### Phase −1 — Protect the corpus (do this FIRST, before any schema change)
-- [ ] **Schema versioning.** Introduce `PRAGMA user_version` (or a `_meta` table).
-      Write a real migration runner: ordered, idempotent, logged, transactional.
-      Replace the swallowing `catch{}` ad-hoc `ALTER` at
-      [`repository.cjs:186`](electron/repository.cjs).
-- [ ] **Backup-before-migrate.** On version bump, copy `sidekick.db` →
-      `sidekick.db.bak-<version>-<timestamp>` before running migrations. Keep last N.
-- [ ] **Integrity check on open.** `PRAGMA integrity_check`; surface failure in UI
-      rather than crashing silently.
-- [ ] **Full export/import.** Extend `exportAll` to include memories, profile,
-      Specialist hubs, AND vault chunks. Add matching import. Version the export
-      envelope (`{schemaVersion, exportedAt, ...}`). This is also the foundation
-      for portable/starter Experts (invariant #3).
-- [ ] **Test:** migrate an old DB → data intact + backup created; export → import
-      into empty DB → byte-for-corpus-equivalent.
-- **Exit:** a bad migration can never destroy the corpus; the whole corpus round-trips.
+#### Phase −1 — Protect the corpus (do this FIRST, before any schema change) ✅ DONE (commit 367255c)
+- [x] **Schema versioning.** `PRAGMA user_version` + ordered, transactional
+      migration runner (`SCHEMA_VERSION`, `MIGRATIONS`, `runMigrations()`).
+      Migration 1 is the idempotent baseline for fresh + legacy databases.
+- [x] **Backup-before-migrate.** WAL-checkpoint then copy to
+      `<db>.bak-v<from>-<timestamp>` before migrating a database that holds data;
+      keeps most recent `MAX_BACKUPS` (5). `backupDatabase()` / `pruneBackups()`.
+- [x] **Integrity check on open.** `checkIntegrity()` runs `PRAGMA integrity_check`;
+      result stored on `repository.integrity`, exposed via `system:getIntegrity`,
+      surfaced in the renderer as a warning banner (App.jsx bootstrap).
+- [x] **Full export/import.** `exportAll()` emits the full corpus (conversations+
+      messages, memories, profile, hubs + vault chunks) in a versioned envelope
+      (`app`/`kind`/`schemaVersion`). `importAll()` restores transactionally +
+      idempotently (INSERT OR IGNORE). Wired `chat:importAll` + sidebar buttons.
+- [x] **Test:** legacy-backup-on-migrate (data intact + backup created) and full
+      export→import round-trip (incl. embedding fidelity + idempotency). Suite 11→14.
+- **Exit:** ✅ a bad migration can't destroy the corpus; the whole corpus round-trips.
+- **Deferred to Phase 1:** the ad-hoc `ALTER TABLE summary` at
+      [`repository.cjs`](electron/repository.cjs) `initialize()` still exists; fold it
+      into the migration runner when Phase 1 adds the embedding-provenance columns.
 
 #### Phase 0 — Prerequisites
-- [ ] `ollama pull nomic-embed-text` (768-dim, ~274 MB, ~10× faster than embedding
-      through a 32B). Document this as a first-run requirement.
-- [ ] Delete duplicate repository block [`:614-727`](electron/repository.cjs).
+- [x] `ollama pull nomic-embed-text` — done by the author; verified 768-dim live.
+- [x] Delete duplicate repository block (was `:614-727`) — removed in commit 367255c.
 
-#### Phase 1 — The embedding contract (root-cause fix)
-- [ ] Add `embeddingModel: 'nomic-embed-text'` to `DEFAULT_SETTINGS`
-      ([`repository.cjs:5`](electron/repository.cjs)). **Decouple from chat model.**
-- [ ] Every embed call site reads `embeddingModel`, NOT the active chat model:
-      [`ipc.cjs:308`](electron/ipc.cjs), [`memoryManager.cjs:24,182`](electron/memory/memoryManager.cjs),
-      [`deepResearch.cjs:58,116,166`](electron/research/deepResearch.cjs).
-- [ ] Migrate `specialist_chunks` + `message_embeddings`: add
-      `embedding_model TEXT`, `embedding_dim INTEGER`. Filter on both at query time.
-- [ ] `saveSpecialistChunk` / `saveMessageEmbedding` **throw** on empty/non-finite
-      vector — the write-boundary enforcement (invariant #4).
-- [ ] `generateEmbedding` returns a discriminated result
-      (`{ok, embedding, dim}` | `{ok:false, reason}`) so callers know *why* it failed
-      ([`ollama.cjs:139`](electron/ollama.cjs)).
-- [ ] Store vectors as `Float32Array` BLOBs (not JSON) — perf + correctness.
+#### Phase 1 — The embedding contract (root-cause fix) ✅ DONE (commit 21f8931)
+- [x] Added `embeddingModel: 'nomic-embed-text'` to `DEFAULT_SETTINGS`, decoupled
+      from the chat model. Reasoning model stays the user's free choice (invariant #5).
+- [x] Every embed site routes through the pinned embedding model: ipc chat RAG +
+      memory retrieve/index, deepResearch ingest + web. (`model` still used for the
+      chat/summary/extract completions.)
+- [x] Schema **v2** migration adds `embedding_model` + `embedding_dim` to both
+      `specialist_chunks` and `message_embeddings` (defensive `addColumnIfMissing`;
+      fresh DBs get them in CREATE TABLE). `SCHEMA_VERSION` drift guard added.
+- [x] Retrieval filters by dimension → mismatched/legacy (NULL-dim) vectors are
+      excluded, not scored 0.
+- [x] `saveSpecialistChunk`/`saveMessageEmbedding` throw on empty/non-finite via
+      `assertValidEmbedding`; ingest loops skip + count failures (`chunksFailed`) and
+      fail honestly if nothing embeds. Export/import carry the new columns.
+- [x] **Verified live** against real Ollama: PDF ingested with nomic-embed-text is
+      retrievable; the old chat-model query path (4096-d vs 768-d) returns 0 by
+      exclusion. Real user DB migrated v0→v2 on launch with an automatic backup.
+- **Deferred (intentional):** discriminated `generateEmbedding` result → Phase 3
+  (its "reason" is consumed by the pre-flight there); `Float32Array` BLOB storage
+  → Phase 5 perf (would churn the just-verified export/import). Legacy NULL-dim
+  rows await Phase 4 re-index.
 
-#### Phase 2 — Fix PDF ingestion (independent; can parallel Phase 1/3)
-- [ ] Swap to the v2 `PDFParse` class API + `parser.destroy()` (see §2.1).
-- [ ] Empty extracted text (scanned/image PDF) → report *"no extractable text —
-      appears to be scanned"*, NOT a successful 0-chunk ingest.
-- [ ] `scrapePage` returns `null` for non-HTML content-types
-      ([`scraper.cjs:52`](electron/search/scraper.cjs)) → PDFs *linked from* research
-      are silently skipped. Decide: fetch+parse linked PDFs, or explicitly report skip.
+#### Phase 2 — Fix PDF ingestion ✅ DONE (commit 6d392fb)
+- [x] Swapped to the v2 `PDFParse` class API + guaranteed `parser.destroy()`.
+- [x] Guard on **chunks produced** (stronger than raw-text): scanned/image/empty
+      files return `{success:false, reason}`, never a silent 0-chunk success.
+- [ ] `scrapePage` non-HTML skip (PDFs linked from web research) — **deferred**,
+      minor; upload path is the primary flow. Revisit with Stage 3 research work.
 
-#### Phase 3 — Honest reporting (kills silent-success permanently)
-- [ ] Worker returns `{chunksAttempted, chunksIndexed, chunksFailed,
-      embeddingModel, failureReason}` — never `{success:true}`.
-- [ ] IPC pre-flights the embedding model *before* scraping; fail fast with an
-      actionable message if missing/unsupported.
-- [ ] `getSpecialistHub` returns `chunkCount` AND `retrievableChunkCount`
-      (matching current model+dim). UI warns when they diverge.
-- [ ] `SpecialistModal` shows real counts (*"Indexed 47/52 (5 failed)"*), stops
-      the `res.message || '✅'` lie ([`:68,105,169`](src/components/SpecialistModal.jsx)).
-- [ ] Chat path: Specialist active but 0 chunks retrieved → visible badge so an
-      unsourced answer is never mistaken for a grounded one (invariant #1).
+**Build fix found during Phase 1 verification** ✅ (commit 33a1b1f): the production
+build rendered a blank/black window — Vite emitted absolute `/assets/...` paths that
+Electron's `file://` loader resolves to the filesystem root. Set `base:'./'`; verified
+the built page mounts under `file://`. Dev mode had masked this; it would have blocked
+Stage 4 packaging.
 
-#### Phase 4 — Re-index migration (recovers existing vaults; MUST follow Phase 1)
-- [ ] `specialist:reindex` channel: walk each hub, re-embed stored `chunk_text`
-      with the pinned model, write back correct model+dim. **Cheap — `chunk_text`
-      is already stored, no re-scrape/re-upload needed.** Repairs empty vectors in
-      the same pass.
-- [ ] `SpecialistModal` "Re-index Knowledge Vault" button, auto-prompted when
+#### Phase 3 — Honest reporting ✅ DONE (commit adds `feat(specialists)`)
+- [x] Ingest/research workers return real counts (`chunksCount`/`chunksFailed`,
+      `totalChunks`/`totalFailed`) and `{success:false, reason}` on failure — never
+      a bare `{success:true}`.
+- [x] `Ollama.checkEmbedding()` pre-flight; `research.start` + `ingestFile` fail
+      fast with an actionable reason before scraping/reading. **Verified live.**
+- [x] `getSpecialistHub` / `listSpecialistHubs` report `retrievableChunkCount`
+      (chunks embedded with the current model) alongside total `chunkCount`.
+- [x] `SpecialistModal` shows honest outcomes via `describeResult` (no
+      `res.message || '✅'`); shows "N of M retrievable"; warns on divergence.
+- [x] Chat path tags answers with `specialistGrounding`; `ChatView` badges an
+      answer as grounded (with source count) or flags it persona-only/unsourced
+      (invariant #1).
+
+#### Phase 4 — Re-index migration ✅ DONE (same commit)
+- [x] `specialist:reindex` channel + `DeepResearchWorker.reindexHub` re-embeds
+      stored `chunk_text` in place with the current model — cheap, no re-scrape/
+      re-upload. Retrieval filters by model+dim so repaired chunks become matchable.
+      **Verified live:** simulated legacy 4096-d vault (0 retrievable, 0 hits) →
+      re-indexed with real nomic-embed-text → retrievable, planted fact retrieved.
+- [x] `SpecialistModal` "🔧 Re-index Knowledge Vault" button, auto-shown when
       `retrievableChunkCount < chunkCount`.
+- **Note:** empty-vector rows can no longer exist (Phase 1 write boundary rejects
+  them), so re-index only repairs model/dim mismatches — exactly the legacy case.
+
+> **STAGE 1 COMPLETE.** Corpus is protected, portable, honestly reported, and its
+> knowledge is actually retrievable; existing vaults are recoverable. Test suite
+> 11 → 20. Remaining Stage-1-adjacent polish lives in Phase 5 below.
 
 #### Phase 5 — Provenance + citations surfaced (invariants #1, #2)
 - [ ] Add trust-tier + dates to chunk schema; capture at ingestion.
@@ -367,13 +391,18 @@ with an explicit **exit criterion** — do not advance until it's met.
 
 ---
 
-### STAGE 2 — The brain works  (~6 weeks)
+### STAGE 2 — The brain works  (~6 weeks)  ⟵ IN PROGRESS
 *Goal: genuinely better than searching the web — the author's stated bar. Retrieval
 quality is the ceiling on everything; this stage raises it.*
 
-- [ ] **Multi-Expert selection + federated retrieval.** UI multi-select of Experts;
-      `RetrievalService` queries each selected vault, merges, dedups, reranks.
-      (Interface designed in Stage 1; UI + merge logic here.)
+- [x] **Multi-Expert selection + federated retrieval (v1).** Picker is multi-select;
+      the chat handler embeds the query once, searches every selected vault, and
+      layers each expert's persona + matched knowledge into a `<specialist_panel>`
+      prompt. Header lists consulted experts; grounding badge reports combined
+      matches + contributors; selection persists. Also pulled Deep Research query
+      **decomposition** forward (deriveSearchQueries). *Verified live with a 2-expert
+      panel.* Still TODO here: dedup/rerank across vaults (currently top-4 per vault,
+      concatenated), and a shared `RetrievalService` extraction.
 - [ ] **Hybrid retrieval.** Combine FTS5 BM25 (already exists, not wired to vaults)
       with vector similarity. Naive cosine-top-4 fails on the real questions.
 - [ ] **Reranking pass** over the merged candidate set (cross-encoder or LLM-scored).
@@ -383,12 +412,19 @@ quality is the ceiling on everything; this stage raises it.*
 - [ ] **Contradiction/absence handling** — hardest retrieval problem, central to the
       second-opinion use case. A contradiction is *semantically similar* to what it
       contradicts; similarity alone won't find it. Needs explicit design.
-- [ ] **Memory that compounds** (fixes the degradation bug):
-      - dedup on insert; supersede-on-contradiction;
-      - relevance-ranked retrieval, not `slice(0,10)` by recency;
-      - editable auto-extracted facts;
-      - decay/staleness.
-- [ ] **Model routing** implemented (invariant #5).
+- [~] **Memory that compounds** (fixes the degradation bug) — CORE DONE:
+      - [x] dedup on insert (canonical-form match refreshes instead of duplicating);
+      - [x] relevance-ranked retrieval (`rankMemoriesByRelevance`), not `slice(0,10)`
+            by recency;
+      - [ ] supersede-on-contradiction (needs LLM/semantic detection — deferred);
+      - [ ] editable auto-extracted facts (add/delete exist in the Memory Vault UI;
+            inline edit still TODO);
+      - [ ] decay/staleness. *Verified live: 5 adds w/ 2 dups → 3 stored; relevant
+            fact outranks recent one.*
+- [x] **Model routing** (invariant #5): opt-in `backgroundModel` for summaries, fact
+      extraction, and research query generation (empty = chat model). Settings UI
+      selector. *Verified: routes to the background model when set, falls back
+      otherwise.*
 - [ ] **Notes as first-class objects.** User- or model-authored, attached to an
       Expert, themselves embedded + retrievable. NotebookLM's most-loved feature;
       how *insight* compounds vs. documents merely piling up. The author explicitly

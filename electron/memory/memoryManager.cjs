@@ -1,17 +1,62 @@
+const STOPWORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'to', 'of',
+  'in', 'on', 'for', 'with', 'as', 'at', 'by', 'it', 'this', 'that', 'i', 'you', 'my',
+  'me', 'do', 'does', 'how', 'what', 'why', 'when', 'can', 'should', 'would', 'about',
+]);
+
+function tokenize(text) {
+  return (text || '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length > 2 && !STOPWORDS.has(t));
+}
+
+// Rank stored memories by lexical relevance to the query, with recency as the
+// tie-breaker, and return the top `limit`. Replaces pure-recency selection so a
+// burst of unrelated facts can't push the facts that matter to THIS question out
+// of the context window (ROADMAP §2 — memory must compound, not degrade). With no
+// query, this degrades gracefully to recency order.
+function rankMemoriesByRelevance(memories, query, limit = 12) {
+  const queryTerms = new Set(tokenize(query));
+  const scored = memories.map((m) => {
+    let overlap = 0;
+    if (queryTerms.size > 0) {
+      for (const term of new Set(tokenize(`${m.fact} ${m.category || ''}`))) {
+        if (queryTerms.has(term)) overlap += 1;
+      }
+    }
+    return { memory: m, overlap };
+  });
+
+  scored.sort((a, b) => {
+    if (b.overlap !== a.overlap) return b.overlap - a.overlap;
+    return new Date(b.memory.updatedAt || 0) - new Date(a.memory.updatedAt || 0);
+  });
+
+  return scored.slice(0, limit).map((s) => s.memory);
+}
+
 class MemoryManager {
   constructor({ repository, ollama }) {
     this.repository = repository;
     this.ollama = ollama;
   }
 
-  async retrieveContext({ query, currentConversationId, model }) {
+  async retrieveContext({ query, currentConversationId, model, embeddingModel }) {
+    // Cross-conversation RAG queries the vector store, which is keyed by embedding
+    // dimension — so the query MUST be embedded with the same dedicated embedding
+    // model the chunks were written with, never the chat model (invariant #5).
+    const embedModel = embeddingModel || model;
     const contextSections = [];
 
-    // 1. Retrieve Structured User Memories
+    // 1. Retrieve Structured User Memories, ranked by relevance to this query so
+    //    the most pertinent facts survive the context budget rather than whatever
+    //    was most recent.
     try {
       const memories = this.repository.listUserMemories();
       if (memories && memories.length > 0) {
-        const memoryLines = memories.slice(0, 10).map((m) => `- ${m.fact} (${m.category})`);
+        const relevant = rankMemoriesByRelevance(memories, query, 12);
+        const memoryLines = relevant.map((m) => `- ${m.fact} (${m.category})`);
         contextSections.push(`### Stored User Preferences & Facts:\n${memoryLines.join('\n')}`);
       }
     } catch (_e) {
@@ -20,9 +65,9 @@ class MemoryManager {
 
     // 2. Retrieve Vector RAG Memory (Cross-conversation historical memory)
     try {
-      if (query && model) {
+      if (query && embedModel) {
         const queryEmbedding = await this.ollama.generateEmbedding({
-          model,
+          model: embedModel,
           input: query,
         });
 
@@ -173,14 +218,15 @@ class MemoryManager {
     }
   }
 
-  async indexMessageEmbedding({ messageId, conversationId, content, model }) {
-    if (!content || !model || content.length < 20) {
+  async indexMessageEmbedding({ messageId, conversationId, content, model, embeddingModel }) {
+    const embedModel = embeddingModel || model;
+    if (!content || !embedModel || content.length < 20) {
       return;
     }
 
     try {
       const embedding = await this.ollama.generateEmbedding({
-        model,
+        model: embedModel,
         input: content,
       });
 
@@ -190,6 +236,7 @@ class MemoryManager {
           conversationId,
           chunkText: content.slice(0, 500),
           embedding,
+          embeddingModel: embedModel,
         });
       }
     } catch (_e) {
@@ -200,4 +247,5 @@ class MemoryManager {
 
 module.exports = {
   MemoryManager,
+  rankMemoriesByRelevance,
 };

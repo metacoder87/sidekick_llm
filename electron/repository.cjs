@@ -1,5 +1,14 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const Database = require('better-sqlite3');
 const { randomUUID } = require('node:crypto');
+
+// The current target schema version. Bump this and append a migration to
+// MIGRATIONS whenever the schema changes. The corpus is the project's asset
+// (see ROADMAP.md §3) — every migration runs behind a backup and an integrity
+// check so a bad upgrade can never destroy user data.
+const SCHEMA_VERSION = 2;
+const MAX_BACKUPS = 5;
 
 const DEFAULT_TITLE = 'New conversation';
 const DEFAULT_SETTINGS = {
@@ -10,6 +19,14 @@ const DEFAULT_SETTINGS = {
   tavilyApiKey: '',
   braveApiKey: '',
   autoMemoryEnabled: 'true',
+  // Embeddings use a dedicated model, decoupled from the chat model, so switching
+  // the chat model never changes vector dimensions and orphans the vault
+  // (ROADMAP §3 invariant #5). nomic-embed-text is 768-d and purpose-built.
+  embeddingModel: 'nomic-embed-text',
+  // Optional fast model for background/utility work (summaries, fact extraction,
+  // research query generation). Empty = use the active chat model. Lets a user chat
+  // with a large model while cheap background tasks run on a small one (invariant #5).
+  backgroundModel: '',
 };
 
 const DEFAULT_PROFILE = {
@@ -38,6 +55,34 @@ function cosineSimilarity(vecA, vecB) {
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
+// The embedding contract's write-boundary check (ROADMAP §3 invariant #4). A
+// chunk without a valid, finite, non-empty vector is invisible to retrieval, not
+// merely degraded — so we refuse to persist one rather than store a dead row that
+// inflates counts and silently returns nothing.
+function assertValidEmbedding(embedding) {
+  if (!Array.isArray(embedding) || embedding.length === 0) {
+    throw new Error('Embedding is empty — refusing to store an unretrievable chunk.');
+  }
+  for (const value of embedding) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new Error('Embedding contains a non-finite value — refusing to store.');
+    }
+  }
+}
+
+// Canonical form of a fact for de-duplication: case-insensitive, whitespace-
+// collapsed, trailing punctuation removed. Lets "I use Windows 11", "i use windows
+// 11." and "I  use  Windows 11" collapse to a single stored memory instead of
+// accumulating near-duplicates that later evict useful facts (ROADMAP §2 — memory
+// must compound, not degrade).
+function normalizeFact(fact) {
+  return (fact || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[\s.!?;,]+$/, '')
+    .trim();
+}
+
 function createAutoTitle(content) {
   return content
     .replace(/\s+/g, ' ')
@@ -57,10 +102,169 @@ function toFtsQuery(input) {
 
 class ConversationRepository {
   constructor(filename) {
+    this.filename = filename;
     this.db = new Database(filename);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
+
+    // 1. Verify the existing database is not corrupt BEFORE we touch it.
+    this.integrity = this.checkIntegrity();
+
+    // 2. Back up (if there is existing data) and run any pending migrations.
+    //    This must happen before initialize()/seeding so an upgrade of an old
+    //    database is always protected by a fresh backup.
+    this.runMigrations();
+
+    // 3. Ensure schema objects exist and defaults are seeded (idempotent).
     this.initialize();
+  }
+
+  // Returns { ok: boolean, detail: string }. Never throws — a corrupt database
+  // should be surfaced to the user, not crash startup silently (ROADMAP §5 Phase −1).
+  checkIntegrity() {
+    try {
+      const rows = this.db.pragma('integrity_check');
+      const detail = Array.isArray(rows) && rows[0] ? rows[0].integrity_check : 'unknown';
+      return { ok: detail === 'ok', detail };
+    } catch (error) {
+      return { ok: false, detail: error.message };
+    }
+  }
+
+  getSchemaVersion() {
+    const rows = this.db.pragma('user_version');
+    return Array.isArray(rows) && rows[0] ? rows[0].user_version : 0;
+  }
+
+  setSchemaVersion(version) {
+    this.db.pragma(`user_version = ${Number(version)}`);
+  }
+
+  hasExistingData() {
+    try {
+      const row = this.db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM sqlite_master
+           WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+        )
+        .get();
+      return row.count > 0;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  // Consistent, WAL-safe copy of the database file. Checkpoints the WAL into the
+  // main file first, then copies it. Returns the backup path, or null on failure
+  // (backup failure must not block startup, but is logged).
+  backupDatabase(tag) {
+    try {
+      // Skip for in-memory databases (used in tests).
+      if (!this.filename || this.filename === ':memory:') {
+        return null;
+      }
+      this.db.pragma('wal_checkpoint(TRUNCATE)');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const backupPath = `${this.filename}.bak-${tag}-${stamp}`;
+      fs.copyFileSync(this.filename, backupPath);
+      this.pruneBackups();
+      return backupPath;
+    } catch (error) {
+      console.error('Database backup failed:', error.message);
+      return null;
+    }
+  }
+
+  // Keep only the most recent MAX_BACKUPS backup files for this database.
+  pruneBackups() {
+    try {
+      const dir = path.dirname(this.filename);
+      const base = path.basename(this.filename);
+      const prefix = `${base}.bak-`;
+      const backups = fs
+        .readdirSync(dir)
+        .filter((name) => name.startsWith(prefix))
+        .map((name) => ({
+          name,
+          time: fs.statSync(path.join(dir, name)).mtimeMs,
+        }))
+        .sort((a, b) => b.time - a.time);
+
+      for (const stale of backups.slice(MAX_BACKUPS)) {
+        fs.rmSync(path.join(dir, stale.name), { force: true });
+      }
+    } catch (error) {
+      console.error('Backup pruning failed:', error.message);
+    }
+  }
+
+  // Adds a column to an existing table only when both the table exists and the
+  // column does not. On a fresh database the table has not been created yet at
+  // migration time (migrations run before initialize()), so this is a safe no-op
+  // and initialize() creates the table with the column already present.
+  addColumnIfMissing(table, column, type) {
+    const tableExists = this.db
+      .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`)
+      .get(table);
+    if (!tableExists) {
+      return;
+    }
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all();
+    if (!columns.some((c) => c.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
+  }
+
+  // Ordered, additive migrations. Migration 1 is the baseline: the schema is
+  // created idempotently by initialize(), so on both fresh and legacy (pre-
+  // versioning) databases this migration only stamps the version. Future schema
+  // changes append { version: N, up(db) } entries with real ALTER statements.
+  runMigrations() {
+    const migrations = [
+      { version: 1, up: () => {} },
+      {
+        // Embedding provenance: tag every stored vector with the model that
+        // produced it and its dimension, so retrieval can exclude vectors that
+        // no longer match the active embedding model instead of silently scoring
+        // them 0 (ROADMAP §3 invariant #4, §5 Phase 1). Legacy rows keep NULLs and
+        // are excluded until re-indexed (Phase 4).
+        version: 2,
+        up: () => {
+          this.addColumnIfMissing('specialist_chunks', 'embedding_model', 'TEXT');
+          this.addColumnIfMissing('specialist_chunks', 'embedding_dim', 'INTEGER');
+          this.addColumnIfMissing('message_embeddings', 'embedding_model', 'TEXT');
+          this.addColumnIfMissing('message_embeddings', 'embedding_dim', 'INTEGER');
+        },
+      },
+    ];
+
+    // Guard against drift: the migration list must reach the declared version.
+    const latest = migrations[migrations.length - 1].version;
+    if (latest !== SCHEMA_VERSION) {
+      throw new Error(
+        `Migration list ends at v${latest} but SCHEMA_VERSION is ${SCHEMA_VERSION}.`,
+      );
+    }
+
+    const current = this.getSchemaVersion();
+    const pending = migrations.filter((m) => m.version > current);
+    if (pending.length === 0) {
+      return;
+    }
+
+    // Only back up when upgrading a database that already holds data. A brand-new
+    // database (no tables yet) has nothing worth backing up.
+    if (this.hasExistingData()) {
+      this.backupDatabase(`v${current}`);
+    }
+
+    for (const migration of pending) {
+      const applyMigration = this.db.transaction(() => {
+        migration.up(this.db);
+        this.setSchemaVersion(migration.version);
+      });
+      applyMigration();
+    }
   }
 
   initialize() {
@@ -99,6 +303,8 @@ class ConversationRepository {
         conversation_id TEXT NOT NULL,
         chunk_text TEXT NOT NULL,
         embedding_json TEXT NOT NULL,
+        embedding_model TEXT,
+        embedding_dim INTEGER,
         created_at TEXT NOT NULL,
         FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
       );
@@ -130,6 +336,8 @@ class ConversationRepository {
         source_url TEXT,
         chunk_text TEXT NOT NULL,
         embedding_json TEXT NOT NULL,
+        embedding_model TEXT,
+        embedding_dim INTEGER,
         created_at TEXT NOT NULL,
         FOREIGN KEY (hub_id) REFERENCES specialist_hubs(id) ON DELETE CASCADE
       );
@@ -299,6 +507,32 @@ class ConversationRepository {
       throw new Error('Memory fact cannot be empty.');
     }
     const timestamp = now();
+    const norm = normalizeFact(trimmedFact);
+
+    // De-duplicate: if a memory with the same canonical fact already exists, refresh
+    // it (touch updated_at, adopt a more specific category) instead of inserting a
+    // near-duplicate. The table is small, so an in-memory scan is fine.
+    const existing = this.db
+      .prepare(`SELECT id, fact, category, source_conversation_id AS sourceConversationId, created_at AS createdAt FROM user_memories`)
+      .all()
+      .find((row) => normalizeFact(row.fact) === norm);
+
+    if (existing) {
+      const nextCategory = category && category.trim() ? category.trim() : existing.category;
+      this.db
+        .prepare(`UPDATE user_memories SET updated_at = ?, category = ? WHERE id = ?`)
+        .run(timestamp, nextCategory, existing.id);
+      return {
+        id: existing.id,
+        fact: existing.fact,
+        category: nextCategory,
+        sourceConversationId: existing.sourceConversationId,
+        createdAt: existing.createdAt,
+        updatedAt: timestamp,
+        deduped: true,
+      };
+    }
+
     const memory = {
       id: randomUUID(),
       fact: trimmedFact,
@@ -339,17 +573,19 @@ class ConversationRepository {
     return result.changes > 0;
   }
 
-  saveMessageEmbedding({ messageId, conversationId, chunkText, embedding }) {
+  saveMessageEmbedding({ messageId, conversationId, chunkText, embedding, embeddingModel = null }) {
+    assertValidEmbedding(embedding);
     const timestamp = now();
     const id = randomUUID();
     const embeddingJson = JSON.stringify(embedding);
 
     this.db
       .prepare(`
-        INSERT INTO message_embeddings (id, message_id, conversation_id, chunk_text, embedding_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO message_embeddings
+          (id, message_id, conversation_id, chunk_text, embedding_json, embedding_model, embedding_dim, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `)
-      .run(id, messageId, conversationId, chunkText, embeddingJson, timestamp);
+      .run(id, messageId, conversationId, chunkText, embeddingJson, embeddingModel, embedding.length, timestamp);
   }
 
   searchVectorMemory(queryEmbedding, limit = 5, currentConversationId = null) {
@@ -357,22 +593,28 @@ class ConversationRepository {
       return [];
     }
 
+    // Only compare against vectors of the same dimension. Rows from a different
+    // embedding model (or legacy rows with NULL dim) can never match meaningfully
+    // and are excluded here rather than silently scored 0 (invariant #4).
+    const dim = queryEmbedding.length;
+
     let rows;
     if (currentConversationId) {
       rows = this.db
         .prepare(`
           SELECT conversation_id, chunk_text, embedding_json
           FROM message_embeddings
-          WHERE conversation_id != ?
+          WHERE conversation_id != ? AND embedding_dim = ?
         `)
-        .all(currentConversationId);
+        .all(currentConversationId, dim);
     } else {
       rows = this.db
         .prepare(`
           SELECT conversation_id, chunk_text, embedding_json
           FROM message_embeddings
+          WHERE embedding_dim = ?
         `)
-        .all();
+        .all(dim);
     }
 
     const scored = rows
@@ -577,14 +819,165 @@ class ConversationRepository {
     };
   }
 
+  // Full-corpus export. Unlike a chat-history dump, this includes everything that
+  // makes the app valuable and is otherwise unrecoverable: memories, profile,
+  // Specialist hubs AND their vector chunks (ROADMAP §3 invariant #3). Settings are
+  // intentionally excluded — they are re-enterable config and contain secrets
+  // (API keys). The envelope is versioned so a future import can adapt.
   exportAll() {
+    const hubs = this.listSpecialistHubs().map((hub) => ({
+      ...hub,
+      chunks: this.listSpecialistChunksForExport(hub.id),
+    }));
+
     return {
+      app: 'sidekick-llm',
+      kind: 'corpus-export',
+      schemaVersion: this.getSchemaVersion(),
       exportedAt: now(),
       conversations: this.listConversations().map((conversation) => ({
         ...conversation,
         messages: this.listMessages(conversation.id),
       })),
+      userMemories: this.listUserMemories(),
+      userProfile: this.getUserProfile(),
+      specialistHubs: hubs,
     };
+  }
+
+  // Raw chunk rows for a hub, including the stored embedding JSON, for export.
+  listSpecialistChunksForExport(hubId) {
+    return this.db
+      .prepare(`
+        SELECT
+          id,
+          hub_id AS hubId,
+          source_title AS sourceTitle,
+          source_url AS sourceUrl,
+          chunk_text AS chunkText,
+          embedding_json AS embeddingJson,
+          embedding_model AS embeddingModel,
+          embedding_dim AS embeddingDim,
+          created_at AS createdAt
+        FROM specialist_chunks
+        WHERE hub_id = ?
+        ORDER BY created_at ASC
+      `)
+      .all(hubId);
+  }
+
+  // Restore a corpus export into this database. Idempotent: existing rows (matched
+  // by primary key) are left untouched via INSERT OR IGNORE, so importing the same
+  // file twice, or merging into a populated database, never duplicates or clobbers.
+  // Runs in a single transaction — a malformed payload rolls back cleanly.
+  // Returns per-entity counts of rows actually inserted.
+  importAll(payload) {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('Import payload is not a valid object.');
+    }
+
+    const counts = { conversations: 0, messages: 0, userMemories: 0, specialistHubs: 0, specialistChunks: 0 };
+
+    const insertConversation = this.db.prepare(`
+      INSERT OR IGNORE INTO conversations (id, title, summary, created_at, updated_at, last_message_at)
+      VALUES (@id, @title, @summary, @createdAt, @updatedAt, @lastMessageAt)
+    `);
+    const insertMessage = this.db.prepare(`
+      INSERT OR IGNORE INTO messages (id, conversation_id, role, content, status, created_at)
+      VALUES (@id, @conversationId, @role, @content, @status, @createdAt)
+    `);
+    const insertMemory = this.db.prepare(`
+      INSERT OR IGNORE INTO user_memories (id, fact, category, source_conversation_id, created_at, updated_at)
+      VALUES (@id, @fact, @category, @sourceConversationId, @createdAt, @updatedAt)
+    `);
+    const insertHub = this.db.prepare(`
+      INSERT OR IGNORE INTO specialist_hubs (id, name, description, system_prompt, icon, created_at, updated_at)
+      VALUES (@id, @name, @description, @systemPrompt, @icon, @createdAt, @updatedAt)
+    `);
+    const insertChunk = this.db.prepare(`
+      INSERT OR IGNORE INTO specialist_chunks
+        (id, hub_id, source_title, source_url, chunk_text, embedding_json, embedding_model, embedding_dim, created_at)
+      VALUES (@id, @hubId, @sourceTitle, @sourceUrl, @chunkText, @embeddingJson, @embeddingModel, @embeddingDim, @createdAt)
+    `);
+    const insertProfile = this.db.prepare(`
+      INSERT INTO user_profile (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `);
+
+    const run = this.db.transaction(() => {
+      for (const conversation of payload.conversations || []) {
+        const res = insertConversation.run({
+          id: conversation.id,
+          title: conversation.title,
+          summary: conversation.summary ?? null,
+          createdAt: conversation.createdAt,
+          updatedAt: conversation.updatedAt,
+          lastMessageAt: conversation.lastMessageAt ?? null,
+        });
+        counts.conversations += res.changes;
+
+        for (const message of conversation.messages || []) {
+          const mres = insertMessage.run({
+            id: message.id,
+            conversationId: conversation.id,
+            role: message.role,
+            content: message.content,
+            status: message.status || 'complete',
+            createdAt: message.createdAt,
+          });
+          counts.messages += mres.changes;
+        }
+      }
+
+      for (const memory of payload.userMemories || []) {
+        const res = insertMemory.run({
+          id: memory.id,
+          fact: memory.fact,
+          category: memory.category || 'general',
+          sourceConversationId: memory.sourceConversationId ?? null,
+          createdAt: memory.createdAt,
+          updatedAt: memory.updatedAt,
+        });
+        counts.userMemories += res.changes;
+      }
+
+      for (const hub of payload.specialistHubs || []) {
+        const res = insertHub.run({
+          id: hub.id,
+          name: hub.name,
+          description: hub.description ?? '',
+          systemPrompt: hub.systemPrompt ?? '',
+          icon: hub.icon || 'brain',
+          createdAt: hub.createdAt,
+          updatedAt: hub.updatedAt,
+        });
+        counts.specialistHubs += res.changes;
+
+        for (const chunk of hub.chunks || []) {
+          const cres = insertChunk.run({
+            id: chunk.id,
+            hubId: hub.id,
+            sourceTitle: chunk.sourceTitle,
+            sourceUrl: chunk.sourceUrl ?? '',
+            chunkText: chunk.chunkText,
+            embeddingJson: chunk.embeddingJson,
+            embeddingModel: chunk.embeddingModel ?? null,
+            embeddingDim: chunk.embeddingDim ?? null,
+            createdAt: chunk.createdAt,
+          });
+          counts.specialistChunks += cres.changes;
+        }
+      }
+
+      if (payload.userProfile && typeof payload.userProfile === 'object') {
+        for (const [key, value] of Object.entries(payload.userProfile)) {
+          insertProfile.run(key, String(value ?? ''));
+        }
+      }
+    });
+
+    run();
+    return counts;
   }
 
   getSetting(key) {
@@ -611,121 +1004,6 @@ class ConversationRepository {
       .run(key, String(value));
   }
 
-  updateConversationSummary(conversationId, summary) {
-    const timestamp = now();
-    this.db
-      .prepare(`
-        UPDATE conversations
-        SET summary = @summary, updated_at = @timestamp
-        WHERE id = @conversationId
-      `)
-      .run({ conversationId, summary, timestamp });
-  }
-
-  addUserMemory({ fact, category = 'general', conversationId = null }) {
-    const trimmedFact = fact.trim();
-    if (!trimmedFact) {
-      throw new Error('Memory fact cannot be empty.');
-    }
-    const timestamp = now();
-    const memory = {
-      id: randomUUID(),
-      fact: trimmedFact,
-      category: category.trim() || 'general',
-      sourceConversationId: conversationId || null,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-
-    this.db
-      .prepare(`
-        INSERT INTO user_memories (id, fact, category, source_conversation_id, created_at, updated_at)
-        VALUES (@id, @fact, @category, @sourceConversationId, @createdAt, @updatedAt)
-      `)
-      .run(memory);
-
-    return memory;
-  }
-
-  listUserMemories() {
-    return this.db
-      .prepare(`
-        SELECT
-          id,
-          fact,
-          category,
-          source_conversation_id AS sourceConversationId,
-          created_at AS createdAt,
-          updated_at AS updatedAt
-        FROM user_memories
-        ORDER BY updated_at DESC
-      `)
-      .all();
-  }
-
-  deleteUserMemory(id) {
-    const result = this.db.prepare(`DELETE FROM user_memories WHERE id = ?`).run(id);
-    return result.changes > 0;
-  }
-
-  saveMessageEmbedding({ messageId, conversationId, chunkText, embedding }) {
-    const timestamp = now();
-    const id = randomUUID();
-    const embeddingJson = JSON.stringify(embedding);
-
-    this.db
-      .prepare(`
-        INSERT INTO message_embeddings (id, message_id, conversation_id, chunk_text, embedding_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `)
-      .run(id, messageId, conversationId, chunkText, embeddingJson, timestamp);
-  }
-
-  searchVectorMemory(queryEmbedding, limit = 5, currentConversationId = null) {
-    if (!queryEmbedding || !queryEmbedding.length) {
-      return [];
-    }
-
-    let rows;
-    if (currentConversationId) {
-      rows = this.db
-        .prepare(`
-          SELECT conversation_id, chunk_text, embedding_json
-          FROM message_embeddings
-          WHERE conversation_id != ?
-        `)
-        .all(currentConversationId);
-    } else {
-      rows = this.db
-        .prepare(`
-          SELECT conversation_id, chunk_text, embedding_json
-          FROM message_embeddings
-        `)
-        .all();
-    }
-
-    const scored = rows
-      .map((row) => {
-        try {
-          const vec = JSON.parse(row.embedding_json);
-          const score = cosineSimilarity(queryEmbedding, vec);
-          return {
-            conversationId: row.conversation_id,
-            chunkText: row.chunk_text,
-            score,
-          };
-        } catch (_e) {
-          return null;
-        }
-      })
-      .filter(Boolean)
-      .filter((item) => item.score > 0.45)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
-
-    return scored;
-  }
-
   // Profile Methods
   getUserProfile() {
     const rows = this.db.prepare(`SELECT key, value FROM user_profile`).all();
@@ -748,9 +1026,19 @@ class ConversationRepository {
     return this.getUserProfile();
   }
 
-  // Specialist Hub Methods
+  // Specialist Hub Methods.
+  //
+  // Every hub reports two counts:
+  //   chunkCount            — total stored chunks
+  //   retrievableChunkCount — chunks embedded with the CURRENTLY configured
+  //                           embedding model, i.e. the ones retrieval can actually
+  //                           match. When these diverge, some chunks were embedded
+  //                           with a different (or no) model and are dead until
+  //                           re-indexed (Phase 4). The UI uses the gap to warn and
+  //                           to offer re-indexing (ROADMAP §5 Phase 3/4).
   listSpecialistHubs() {
-    const hubs = this.db
+    const embeddingModel = this.getSetting('embeddingModel');
+    return this.db
       .prepare(`
         SELECT
           h.id,
@@ -760,14 +1048,13 @@ class ConversationRepository {
           h.icon,
           h.created_at AS createdAt,
           h.updated_at AS updatedAt,
-          COUNT(c.id) AS chunkCount
+          (SELECT COUNT(*) FROM specialist_chunks sc WHERE sc.hub_id = h.id) AS chunkCount,
+          (SELECT COUNT(*) FROM specialist_chunks sc
+             WHERE sc.hub_id = h.id AND sc.embedding_model = @embeddingModel) AS retrievableChunkCount
         FROM specialist_hubs h
-        LEFT JOIN specialist_chunks c ON c.hub_id = h.id
-        GROUP BY h.id
         ORDER BY h.updated_at DESC
       `)
-      .all();
-    return hubs;
+      .all({ embeddingModel });
   }
 
   getSpecialistHub(id) {
@@ -786,10 +1073,14 @@ class ConversationRepository {
       `)
       .get(id);
     if (!hub) return null;
+    const embeddingModel = this.getSetting('embeddingModel');
     const chunkCount = this.db
       .prepare(`SELECT COUNT(*) as count FROM specialist_chunks WHERE hub_id = ?`)
       .get(id).count;
-    return { ...hub, chunkCount };
+    const retrievableChunkCount = this.db
+      .prepare(`SELECT COUNT(*) as count FROM specialist_chunks WHERE hub_id = ? AND embedding_model = ?`)
+      .get(id, embeddingModel).count;
+    return { ...hub, chunkCount, retrievableChunkCount };
   }
 
   createSpecialistHub({ name, description = '', systemPrompt = '', icon = 'brain' }) {
@@ -837,17 +1128,19 @@ class ConversationRepository {
     return result.changes > 0;
   }
 
-  saveSpecialistChunk({ hubId, sourceTitle, sourceUrl = '', chunkText, embedding }) {
+  saveSpecialistChunk({ hubId, sourceTitle, sourceUrl = '', chunkText, embedding, embeddingModel = null }) {
+    assertValidEmbedding(embedding);
     const timestamp = now();
     const id = randomUUID();
     const embeddingJson = JSON.stringify(embedding);
 
     this.db
       .prepare(`
-        INSERT INTO specialist_chunks (id, hub_id, source_title, source_url, chunk_text, embedding_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO specialist_chunks
+          (id, hub_id, source_title, source_url, chunk_text, embedding_json, embedding_model, embedding_dim, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
-      .run(id, hubId, sourceTitle, sourceUrl, chunkText, embeddingJson, timestamp);
+      .run(id, hubId, sourceTitle, sourceUrl, chunkText, embeddingJson, embeddingModel, embedding.length, timestamp);
 
     // Update hub timestamp
     this.db
@@ -855,18 +1148,59 @@ class ConversationRepository {
       .run(timestamp, hubId);
   }
 
-  searchSpecialistVectorMemory(hubId, queryEmbedding, limit = 5) {
+  // Chunks that need re-embedding for the given (current) model: everything not
+  // already embedded with it — legacy NULL-model rows and rows from a previously
+  // configured model. Returns id + chunk_text so the worker can re-embed in place.
+  listChunksForReindex(hubId, embeddingModel) {
+    return this.db
+      .prepare(`
+        SELECT id, chunk_text AS chunkText
+        FROM specialist_chunks
+        WHERE hub_id = ?
+          AND (embedding_model IS NULL OR embedding_model != ?)
+        ORDER BY created_at ASC
+      `)
+      .all(hubId, embeddingModel);
+  }
+
+  // Overwrite a single chunk's vector in place (used by re-indexing). Enforces the
+  // same write-boundary contract as inserts (invariant #4).
+  updateChunkEmbedding(chunkId, embedding, embeddingModel) {
+    assertValidEmbedding(embedding);
+    this.db
+      .prepare(`
+        UPDATE specialist_chunks
+        SET embedding_json = ?, embedding_model = ?, embedding_dim = ?
+        WHERE id = ?
+      `)
+      .run(JSON.stringify(embedding), embeddingModel, embedding.length, chunkId);
+  }
+
+  searchSpecialistVectorMemory(hubId, queryEmbedding, limit = 5, embeddingModel = null) {
     if (!hubId || !queryEmbedding || !queryEmbedding.length) {
       return [];
     }
 
-    const rows = this.db
-      .prepare(`
-        SELECT hub_id, source_title, source_url, chunk_text, embedding_json
-        FROM specialist_chunks
-        WHERE hub_id = ?
-      `)
-      .all(hubId);
+    // Restrict to vectors of the same dimension as the query. When the embedding
+    // model is known, also require it to match: a chunk from a different model
+    // lives in a different vector space and its similarity would be meaningless
+    // even at the same dimension (invariant #4).
+    const dim = queryEmbedding.length;
+    const rows = embeddingModel
+      ? this.db
+          .prepare(`
+            SELECT hub_id, source_title, source_url, chunk_text, embedding_json
+            FROM specialist_chunks
+            WHERE hub_id = ? AND embedding_dim = ? AND embedding_model = ?
+          `)
+          .all(hubId, dim, embeddingModel)
+      : this.db
+          .prepare(`
+            SELECT hub_id, source_title, source_url, chunk_text, embedding_json
+            FROM specialist_chunks
+            WHERE hub_id = ? AND embedding_dim = ?
+          `)
+          .all(hubId, dim);
 
     const scored = rows
       .map((row) => {
@@ -917,6 +1251,7 @@ module.exports = {
   DEFAULT_TITLE,
   DEFAULT_SETTINGS,
   DEFAULT_PROFILE,
+  SCHEMA_VERSION,
   createAutoTitle,
 };
 

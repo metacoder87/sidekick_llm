@@ -136,6 +136,44 @@ class OllamaService {
     return payload.message?.content || '';
   }
 
+  // Pre-flight an embedding model before a long ingest/research run so we can fail
+  // fast with an actionable reason instead of scraping for minutes and producing an
+  // empty vault (ROADMAP §5 Phase 3). Returns { ok, dim } or { ok:false, reason }.
+  async checkEmbedding(model) {
+    if (!model) {
+      return { ok: false, reason: 'No embedding model is configured.' };
+    }
+    try {
+      const response = await fetch(`${this.baseUrl()}/api/embeddings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, prompt: 'preflight' }),
+      });
+
+      if (!response.ok) {
+        const detail = (await response.text().catch(() => '')).slice(0, 160);
+        return {
+          ok: false,
+          reason: `Embedding model "${model}" returned HTTP ${response.status}. ${detail}`.trim(),
+        };
+      }
+
+      const payload = await response.json();
+      if (payload.error) {
+        return { ok: false, reason: `Embedding model "${model}": ${payload.error}` };
+      }
+      if (!Array.isArray(payload.embedding) || payload.embedding.length === 0) {
+        return {
+          ok: false,
+          reason: `Model "${model}" returned no embedding — it may not support embeddings. Pull a dedicated model like nomic-embed-text.`,
+        };
+      }
+      return { ok: true, dim: payload.embedding.length };
+    } catch (error) {
+      return { ok: false, reason: `Cannot reach Ollama to embed with "${model}": ${error.message}` };
+    }
+  }
+
   async generateEmbedding({ model, input }) {
     try {
       const response = await fetch(`${this.baseUrl()}/api/embeddings`, {

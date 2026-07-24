@@ -90,14 +90,40 @@ function MessageBubble({ message }) {
       {message.role === 'assistant' && message.citations ? (
         <CitationsList citations={message.citations} />
       ) : null}
+      {message.role === 'assistant' && message.specialistGrounding ? (
+        <GroundingBadge grounding={message.specialistGrounding} />
+      ) : null}
     </article>
+  );
+}
+
+function GroundingBadge({ grounding }) {
+  // Back-compat: older single-expert shape was { name, grounded, matches }.
+  const experts = grounding.experts || (grounding.name ? [{ name: grounding.name, matches: grounding.matches }] : []);
+  const contributing = experts.filter((e) => (e.matches || 0) > 0);
+
+  if (grounding.grounded) {
+    return (
+      <div className="grounding-badge grounding-badge--grounded">
+        ⚡ Grounded in {grounding.matches} source{grounding.matches === 1 ? '' : 's'} from{' '}
+        {contributing.map((e) => e.name).join(', ')}
+      </div>
+    );
+  }
+
+  const names = experts.map((e) => e.name).join(', ');
+  return (
+    <div className="grounding-badge grounding-badge--ungrounded">
+      ⚠️ No matching vault knowledge from {names || 'the selected experts'} for this question —
+      this answer is from the model, not cited sources.
+    </div>
   );
 }
 
 export default function ChatView({
   conversation,
   streamRequestId,
-  activeSpecialist,
+  activeSpecialists = [],
   onExportConversation,
 }) {
   if (!conversation) {
@@ -119,9 +145,11 @@ export default function ChatView({
           <h2>{conversation.title}</h2>
         </div>
         <div className="chat-view__header-actions">
-          {activeSpecialist ? (
+          {activeSpecialists.length > 0 ? (
             <span className="specialist-active-badge">
-              Active Expert: {activeSpecialist.name}
+              {activeSpecialists.length === 1
+                ? `Consulting: ${activeSpecialists[0].name}`
+                : `Consulting ${activeSpecialists.length} experts: ${activeSpecialists.map((h) => h.name).join(', ')}`}
             </span>
           ) : null}
           {streamRequestId ? <span className="streaming-badge">Streaming</span> : null}

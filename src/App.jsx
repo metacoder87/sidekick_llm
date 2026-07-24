@@ -54,9 +54,9 @@ export default function App() {
   const [isSpecialistModalOpen, setIsSpecialistModalOpen] = useState(false);
   const [specialistToEdit, setSpecialistToEdit] = useState(null);
 
-  // Active Specialist Hub
-  const [activeSpecialistId, setActiveSpecialistId] = useState(null);
-  const [activeSpecialistHub, setActiveSpecialistHub] = useState(null);
+  // Active Specialist Hubs — a panel of experts consulted for each message.
+  const [activeSpecialistIds, setActiveSpecialistIds] = useState([]);
+  const [activeSpecialistHubs, setActiveSpecialistHubs] = useState([]);
 
   const deferredSearch = useDeferredValue(searchQuery);
   const messagesRef = useRef(null);
@@ -158,6 +158,35 @@ export default function App() {
 
   async function bootstrap() {
     await Promise.all([refreshConversationList(), refreshOllamaStatus()]);
+
+    // Restore the previously consulted panel of experts (filtered to those that
+    // still exist).
+    try {
+      const settings = await sidekick.settings.get();
+      const savedIds = settings?.activeSpecialistIds ? JSON.parse(settings.activeSpecialistIds) : [];
+      if (Array.isArray(savedIds) && savedIds.length > 0) {
+        const list = await sidekick.specialist.list().catch(() => []);
+        const existing = new Set((list || []).map((h) => h.id));
+        await applySpecialistSelection(savedIds.filter((id) => existing.has(id)));
+      }
+    } catch (_error) {
+      // Non-fatal — start with no panel.
+    }
+
+    // Surface database corruption instead of failing silently. The corpus is the
+    // asset — if SQLite reports an integrity problem, the user needs to know before
+    // trusting or writing to it (see ROADMAP §5 Phase −1).
+    try {
+      const integrity = await sidekick.system.getIntegrity();
+      if (integrity && integrity.ok === false) {
+        setNotice(
+          `⚠️ Local database integrity check failed (${integrity.detail}). ` +
+            `A backup of your data may be needed — avoid heavy use until resolved.`,
+        );
+      }
+    } catch (_error) {
+      // Integrity channel unavailable (older preload); non-fatal.
+    }
   }
 
   useEffect(() => {
@@ -334,14 +363,29 @@ export default function App() {
     setActiveModel(modelName);
   }
 
-  async function handleSelectSpecialist(hubId) {
-    setActiveSpecialistId(hubId);
-    if (!hubId) {
-      setActiveSpecialistHub(null);
-    } else if (sidekick) {
-      const hub = await sidekick.specialist.list().then((list) => list.find((h) => h.id === hubId));
-      setActiveSpecialistHub(hub || null);
+  // Reflect a set of selected ids into hub objects (for header/badges) and persist
+  // the selection so a consulting panel survives restarts.
+  async function applySpecialistSelection(ids) {
+    setActiveSpecialistIds(ids);
+    if (sidekick) {
+      const list = await sidekick.specialist.list().catch(() => []);
+      const byId = new Map((list || []).map((h) => [h.id, h]));
+      setActiveSpecialistHubs(ids.map((id) => byId.get(id)).filter(Boolean));
+      await sidekick.settings.set('activeSpecialistIds', JSON.stringify(ids));
     }
+  }
+
+  // Toggle one expert in/out of the panel. `null` clears the whole panel
+  // (the "General Assistant" choice).
+  function handleSelectSpecialist(hubId) {
+    if (!hubId) {
+      applySpecialistSelection([]);
+      return;
+    }
+    const next = activeSpecialistIds.includes(hubId)
+      ? activeSpecialistIds.filter((id) => id !== hubId)
+      : [...activeSpecialistIds, hubId];
+    applySpecialistSelection(next);
   }
 
   async function handleSendMessage(content) {
@@ -353,7 +397,7 @@ export default function App() {
       conversationId: activeConversationId,
       content,
       webSearchOverride: webSearchEnabled,
-      activeSpecialistId,
+      activeSpecialistIds,
     });
 
     setStreamRequestId(result.requestId);
@@ -405,7 +449,30 @@ export default function App() {
 
     const result = await sidekick.chat.exportAll();
     if (result.saved) {
-      setNotice(`Saved history export to ${result.filePath}`);
+      setNotice(`Saved corpus export to ${result.filePath}`);
+    }
+  }
+
+  async function handleImportAll() {
+    if (!sidekick) {
+      return;
+    }
+
+    try {
+      const result = await sidekick.chat.importAll();
+      if (result.cancelled) {
+        return;
+      }
+      if (result.imported) {
+        const c = result.counts;
+        setNotice(
+          `Imported ${c.conversations} conversations, ${c.userMemories} memories, ` +
+            `${c.specialistHubs} experts (${c.specialistChunks} knowledge chunks).`,
+        );
+        await refreshConversationList();
+      }
+    } catch (error) {
+      setNotice(`Import failed: ${error.message}`);
     }
   }
 
@@ -426,9 +493,10 @@ export default function App() {
         onRenameConversation={handleRenameConversation}
         onDeleteConversation={handleDeleteConversation}
         onExportAll={handleExportAll}
+        onImportAll={handleImportAll}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenSpecialistPicker={() => setIsSpecialistPickerOpen(true)}
-        activeSpecialistHub={activeSpecialistHub}
+        activeSpecialistHubs={activeSpecialistHubs}
       />
 
       <ResizableDivider onResize={handleResizeSidebar} />
@@ -449,11 +517,25 @@ export default function App() {
                 🤖 {activeModel}
               </span>
             ) : null}
-            {activeSpecialistHub ? (
-              <span className="specialist-pill-header">
-                ⚡ {activeSpecialistHub.name}
+            {activeSpecialistHubs.length > 0 ? (
+              <span
+                className="consulting-label"
+                onClick={() => setIsSpecialistPickerOpen(true)}
+                title="Manage the consulting panel"
+              >
+                Consulting:
               </span>
             ) : null}
+            {activeSpecialistHubs.map((hub) => (
+              <span
+                key={hub.id}
+                className="specialist-pill-header"
+                onClick={() => setIsSpecialistPickerOpen(true)}
+                title="Manage the consulting panel"
+              >
+                ⚡ {hub.name}
+              </span>
+            ))}
             <ThemeToggle theme={theme} onToggle={handleToggleTheme} />
           </div>
         </header>
@@ -462,7 +544,7 @@ export default function App() {
           <ChatView
             conversation={activeConversation}
             streamRequestId={streamRequestId}
-            activeSpecialist={activeSpecialistHub}
+            activeSpecialists={activeSpecialistHubs}
             onExportConversation={handleExportConversation}
           />
         </div>
@@ -493,7 +575,7 @@ export default function App() {
         isOpen={isSpecialistPickerOpen}
         onClose={() => setIsSpecialistPickerOpen(false)}
         sidekick={sidekick}
-        activeSpecialistId={activeSpecialistId}
+        activeSpecialistIds={activeSpecialistIds}
         onSelectSpecialist={handleSelectSpecialist}
         onOpenCreateModal={() => {
           setSpecialistToEdit(null);
@@ -512,8 +594,8 @@ export default function App() {
         sidekick={sidekick}
         hubToEdit={specialistToEdit}
         onHubSaved={(saved) => {
-          if (activeSpecialistId === saved.id) {
-            setActiveSpecialistHub(saved);
+          if (activeSpecialistIds.includes(saved.id)) {
+            setActiveSpecialistHubs((hubs) => hubs.map((h) => (h.id === saved.id ? saved : h)));
           }
         }}
       />
