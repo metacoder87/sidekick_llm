@@ -125,6 +125,26 @@ test('repository saves message vector embeddings and performs cosine search', ()
   repository.close();
 });
 
+test('repository de-duplicates near-identical memories instead of accumulating them', () => {
+  const repository = new ConversationRepository(':memory:');
+
+  const first = repository.addUserMemory({ fact: 'I use Windows 11', category: 'hardware' });
+  // Same fact with different case, spacing, and trailing punctuation.
+  const dup = repository.addUserMemory({ fact: 'i use  windows 11.', category: 'os' });
+
+  const all = repository.listUserMemories();
+  assert.equal(all.length, 1); // not two rows
+  assert.equal(dup.id, first.id); // resolved to the same memory
+  assert.equal(dup.deduped, true);
+  assert.equal(all[0].category, 'os'); // adopted the newer, more specific category
+
+  // A genuinely different fact is still stored separately.
+  repository.addUserMemory({ fact: 'I prefer TypeScript', category: 'stack' });
+  assert.equal(repository.listUserMemories().length, 2);
+
+  repository.close();
+});
+
 test('repository excludes dimension-mismatched vectors from retrieval (model-switch safety)', () => {
   const repository = new ConversationRepository(':memory:');
   const hub = repository.createSpecialistHub({ name: 'Dim Test' });

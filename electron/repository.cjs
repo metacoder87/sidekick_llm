@@ -66,6 +66,19 @@ function assertValidEmbedding(embedding) {
   }
 }
 
+// Canonical form of a fact for de-duplication: case-insensitive, whitespace-
+// collapsed, trailing punctuation removed. Lets "I use Windows 11", "i use windows
+// 11." and "I  use  Windows 11" collapse to a single stored memory instead of
+// accumulating near-duplicates that later evict useful facts (ROADMAP §2 — memory
+// must compound, not degrade).
+function normalizeFact(fact) {
+  return (fact || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[\s.!?;,]+$/, '')
+    .trim();
+}
+
 function createAutoTitle(content) {
   return content
     .replace(/\s+/g, ' ')
@@ -490,6 +503,32 @@ class ConversationRepository {
       throw new Error('Memory fact cannot be empty.');
     }
     const timestamp = now();
+    const norm = normalizeFact(trimmedFact);
+
+    // De-duplicate: if a memory with the same canonical fact already exists, refresh
+    // it (touch updated_at, adopt a more specific category) instead of inserting a
+    // near-duplicate. The table is small, so an in-memory scan is fine.
+    const existing = this.db
+      .prepare(`SELECT id, fact, category, source_conversation_id AS sourceConversationId, created_at AS createdAt FROM user_memories`)
+      .all()
+      .find((row) => normalizeFact(row.fact) === norm);
+
+    if (existing) {
+      const nextCategory = category && category.trim() ? category.trim() : existing.category;
+      this.db
+        .prepare(`UPDATE user_memories SET updated_at = ?, category = ? WHERE id = ?`)
+        .run(timestamp, nextCategory, existing.id);
+      return {
+        id: existing.id,
+        fact: existing.fact,
+        category: nextCategory,
+        sourceConversationId: existing.sourceConversationId,
+        createdAt: existing.createdAt,
+        updatedAt: timestamp,
+        deduped: true,
+      };
+    }
+
     const memory = {
       id: randomUUID(),
       fact: trimmedFact,
