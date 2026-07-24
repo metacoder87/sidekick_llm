@@ -391,13 +391,18 @@ Stage 4 packaging.
 
 ---
 
-### STAGE 2 — The brain works  (~6 weeks)
+### STAGE 2 — The brain works  (~6 weeks)  ⟵ IN PROGRESS
 *Goal: genuinely better than searching the web — the author's stated bar. Retrieval
 quality is the ceiling on everything; this stage raises it.*
 
-- [ ] **Multi-Expert selection + federated retrieval.** UI multi-select of Experts;
-      `RetrievalService` queries each selected vault, merges, dedups, reranks.
-      (Interface designed in Stage 1; UI + merge logic here.)
+- [x] **Multi-Expert selection + federated retrieval (v1).** Picker is multi-select;
+      the chat handler embeds the query once, searches every selected vault, and
+      layers each expert's persona + matched knowledge into a `<specialist_panel>`
+      prompt. Header lists consulted experts; grounding badge reports combined
+      matches + contributors; selection persists. Also pulled Deep Research query
+      **decomposition** forward (deriveSearchQueries). *Verified live with a 2-expert
+      panel.* Still TODO here: dedup/rerank across vaults (currently top-4 per vault,
+      concatenated), and a shared `RetrievalService` extraction.
 - [ ] **Hybrid retrieval.** Combine FTS5 BM25 (already exists, not wired to vaults)
       with vector similarity. Naive cosine-top-4 fails on the real questions.
 - [ ] **Reranking pass** over the merged candidate set (cross-encoder or LLM-scored).
