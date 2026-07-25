@@ -530,6 +530,81 @@ capture it; a "re-ingest source" action would repair older ones).
 
 ---
 
+### STAGE 2.5 — Expert Roundtable (multi-turn deliberation)  (~1–2 weeks)
+*Goal: when several Experts are consulted, let the user watch them actually
+deliberate — each speaking in its own grounded voice, responding to each other over
+N rounds — then have a moderator consolidate. This is the fullest expression of the
+project thesis: multiple cited perspectives, disagreement surfaced rather than
+flattened, and the user as the decision-maker (Stance §1, invariants #1/#1a/#9).*
+
+**Today (Stage 2):** consulting N Experts produces ONE blended answer in one voice
+from a single model call. The panel prompt asks it not to flatten disagreement, but
+there are no distinct Expert turns and no interaction.
+
+#### Behaviour to build
+- **Mode toggle** in the composer/panel: **Synthesized** (current) vs **Roundtable**.
+- **Rounds selector (N)**, visible only in Roundtable mode.
+- On send, the discussion runs **round by round, Expert by Expert**, each turn
+  streaming into the conversation as it is produced — the user watches it happen and
+  can interject/cancel. They are in the room, not waiting outside it.
+  - **Round 1:** each Expert answers the user's prompt from its own vault + the
+    conversation context.
+  - **Rounds 2..N-1:** each Expert sees the transcript so far and responds to the
+    others — agreeing, disputing, refining, or explicitly conceding.
+  - **Round N (final):** the moderator asks each Expert for a closing position.
+  - **Moderator turn:** synthesizes for the user — where they agreed, where they
+    disagreed and why, the facts with their sources, and the conclusions drawn.
+- Every Expert turn keeps **its own grounding badge and source cards**, so each
+  claim stays traceable to that Expert's vault (invariant #1).
+
+#### Implementation sketch (foundations already in place)
+- **Schema v7** — `messages` gains `expert_id`, `expert_name`, `round`,
+  `turn_kind` ('expert' | 'moderator'). Each turn is its own assistant message, so
+  history reloads coherently and each turn carries its own citations.
+- **`RoundtableOrchestrator`** — loops rounds × Experts, building each turn's prompt
+  from `ContextBuilder` (that Expert's persona + its retrieved chunks) plus the
+  running transcript. Reuses the existing per-Expert retrieval from `groups`.
+- **Streaming** — today one `requestId` → one message. Add a `turnId` to
+  `streamUpdate`/`streamComplete` and a `discussionComplete` event; the renderer
+  appends turns as they arrive.
+- **Cancellation** — keep ONE AbortController for the whole discussion in
+  `activeGenerations`; the orchestrator checks `signal.aborted` between turns so
+  Cancel stops the round-trip immediately, not just the current token stream.
+- **Retrieval policy (v1)** — retrieve once per Expert at round 1 and reuse that
+  grounding for later rounds; re-retrieving per round is a later refinement (cost).
+
+#### Risks to design for — these decide whether it feels good
+1. **Latency multiplies.** N rounds × E Experts + 1 moderator generations
+   (4 rounds × 3 Experts = 13). On a 70B this is minutes. Mitigations: let
+   Roundtable use the **background/faster model**, run **round 1 in parallel**
+   (Experts don't see each other yet), cap N, and show clear progress
+   ("Round 2 of 4 — Nutrition Expert speaking").
+2. **Context growth.** By round 4 the transcript is large. Needs a token budget:
+   summarize earlier rounds, or pass only each Expert's own last turn plus a running
+   digest — otherwise small models overflow and silently truncate the system prompt.
+3. **Degenerate agreement.** Local models tend to converge to "I agree with the
+   previous expert," padding rounds with nothing. Mitigations: instruct Experts to
+   speak only when they can **add, dispute, or refine**; allow an explicit
+   "no further comment" that skips their turn; consider stopping early when a round
+   adds nothing new. **This is the main quality risk — validate before raising N.**
+4. **Cost/benefit of high N.** Diminishing returns past ~3 rounds. Default to 2–3.
+
+#### Phasing
+- [ ] **v1 — Independent panel:** each Expert answers the prompt in its own voice
+      (round 1 only), rendered as separate grounded turns + moderator synthesis.
+      Parallelizable, fast, delivers most of the value.
+- [ ] **v2 — Deliberation:** rounds 2..N where Experts see and respond to each other,
+      with the transcript budget and the "only speak if you add something" rule.
+- [ ] **v3 — Polish:** early-stop on convergence, per-round re-retrieval, roundtable
+      transcript export, and "save the moderator synthesis as a Note".
+
+**STAGE 2.5 EXIT:** with 3 Experts and N=3 on a real question, the user sees three
+distinct, individually-cited perspectives, at least one genuine disagreement or
+refinement, and a moderator synthesis that is more useful than the single blended
+answer — without the wait feeling unreasonable.
+
+---
+
 ### STAGE 3 — It grows safely  (~4 weeks)
 *Goal: the "always getting better" property, without entropy or corpus poisoning.*
 
