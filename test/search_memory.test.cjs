@@ -3,7 +3,38 @@ const assert = require('node:assert/strict');
 
 const { extractMainText } = require('../electron/search/scraper.cjs');
 const { rankMemoriesByRelevance } = require('../electron/memory/memoryManager.cjs');
-const { selectTopMatches, contributionByExpert } = require('../electron/retrieval.cjs');
+const { selectTopMatches, contributionByExpert, fuseHybrid } = require('../electron/retrieval.cjs');
+
+test('fuseHybrid (RRF) rewards chunks ranked well in BOTH vector and keyword lists', () => {
+  // `both` is 2nd in each list; `vecOnly` is 1st in vector but absent from keyword.
+  // RRF should promote `both`, because agreement across independent rankings is
+  // stronger evidence than a single list's top hit.
+  const vector = [
+    { chunkId: 'vecOnly', chunkText: 'semantically close but wrong', score: 0.80 },
+    { chunkId: 'both', chunkText: 'the right passage', score: 0.72 },
+  ];
+  const keyword = [
+    { chunkId: 'kwOnly', chunkText: 'lexical noise' },
+    { chunkId: 'both', chunkText: 'the right passage' },
+  ];
+
+  const fused = fuseHybrid(vector, keyword, 3);
+  assert.equal(fused[0].chunkId, 'both');
+  // Keyword-only hits are still available (a safety net for low-cosine matches).
+  assert.ok(fused.some((f) => f.chunkId === 'kwOnly'));
+  // Real cosine scores survive for the downstream cross-vault reranker.
+  assert.equal(fused.find((f) => f.chunkId === 'both').score, 0.72);
+  // Keyword-only hits get a usable fallback score rather than undefined.
+  assert.equal(typeof fused.find((f) => f.chunkId === 'kwOnly').score, 'number');
+});
+
+test('fuseHybrid tolerates an empty side (vector-only or keyword-only)', () => {
+  const vecOnly = fuseHybrid([{ chunkId: 'a', score: 0.9 }], [], 5);
+  assert.equal(vecOnly.length, 1);
+  const kwOnly = fuseHybrid([], [{ chunkId: 'b' }], 5);
+  assert.equal(kwOnly.length, 1);
+  assert.deepEqual(fuseHybrid([], [], 5), []);
+});
 
 test('buildTextFragment produces a start,end fragment for long quotes and a plain one for short', async () => {
   const { buildTextFragment, buildSourceLink } = await import('../src/lib/citations.js');

@@ -10,7 +10,7 @@ const { performWebSearch } = require('./search/searchService.cjs');
 const { scrapeTopResults } = require('./search/scraper.cjs');
 const { MemoryManager } = require('./memory/memoryManager.cjs');
 const { DeepResearchWorker } = require('./research/deepResearch.cjs');
-const { selectTopMatches, contributionByExpert } = require('./retrieval.cjs');
+const { selectTopMatches, contributionByExpert, fuseHybrid } = require('./retrieval.cjs');
 
 function stampFilename(prefix) {
   const value = new Date().toISOString().replace(/[:.]/g, '-');
@@ -368,10 +368,15 @@ function registerIpcHandlers({ userDataPath }) {
           const hub = repository.getSpecialistHub(specialistId);
           if (!hub) continue;
           hubs.push(hub);
-          const matches =
+
+          // Hybrid retrieval: vector similarity (paraphrase) fused with BM25
+          // (exact terms) via RRF, then globally reranked across vaults below.
+          const vectorMatches =
             queryEmbedding && queryEmbedding.length > 0
               ? repository.searchSpecialistVectorMemory(hub.id, queryEmbedding, 8, embeddingModel) || []
               : [];
+          const keywordMatches = repository.searchSpecialistKeyword(hub.id, content, 8) || [];
+          const matches = fuseHybrid(vectorMatches, keywordMatches, 8);
           groups.push({ expert: { id: hub.id, name: hub.name }, matches });
         }
 

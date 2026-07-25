@@ -7,7 +7,7 @@ const { randomUUID } = require('node:crypto');
 // MIGRATIONS whenever the schema changes. The corpus is the project's asset
 // (see ROADMAP.md §3) — every migration runs behind a backup and an integrity
 // check so a bad upgrade can never destroy user data.
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const MAX_BACKUPS = 5;
 
 const DEFAULT_TITLE = 'New conversation';
@@ -250,6 +250,30 @@ class ConversationRepository {
           this.addColumnIfMissing('specialist_chunks', 'source_type', 'TEXT');
         },
       },
+      {
+        // Hybrid retrieval: an FTS5 index over vault chunks so keyword/BM25 search
+        // can be fused with vector similarity. Pure cosine misses exact terms
+        // (clause numbers, drug names, API symbols) that a lexical index nails.
+        // The table + triggers are created idempotently in initialize(); this
+        // migration backfills any chunks that predate the index.
+        version: 4,
+        up: () => {
+          const hasChunks = this.db
+            .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='specialist_chunks'`)
+            .get();
+          if (!hasChunks) return;
+          this.db.exec(`
+            CREATE VIRTUAL TABLE IF NOT EXISTS specialist_chunk_search USING fts5(
+              chunk_id UNINDEXED,
+              hub_id UNINDEXED,
+              chunk_text
+            );
+            DELETE FROM specialist_chunk_search;
+            INSERT INTO specialist_chunk_search(rowid, chunk_id, hub_id, chunk_text)
+            SELECT rowid, id, hub_id, chunk_text FROM specialist_chunks;
+          `);
+        },
+      },
     ];
 
     // Guard against drift: the migration list must reach the declared version.
@@ -371,6 +395,32 @@ class ConversationRepository {
         conversation_id UNINDEXED,
         title
       );
+
+      -- Lexical index over Expert vault chunks, for hybrid (BM25 + vector) retrieval.
+      CREATE VIRTUAL TABLE IF NOT EXISTS specialist_chunk_search USING fts5(
+        chunk_id UNINDEXED,
+        hub_id UNINDEXED,
+        chunk_text
+      );
+
+      DROP TRIGGER IF EXISTS specialist_chunks_ai;
+      DROP TRIGGER IF EXISTS specialist_chunks_au;
+      DROP TRIGGER IF EXISTS specialist_chunks_ad;
+
+      CREATE TRIGGER specialist_chunks_ai AFTER INSERT ON specialist_chunks BEGIN
+        INSERT INTO specialist_chunk_search(rowid, chunk_id, hub_id, chunk_text)
+        VALUES (new.rowid, new.id, new.hub_id, new.chunk_text);
+      END;
+
+      CREATE TRIGGER specialist_chunks_au AFTER UPDATE ON specialist_chunks BEGIN
+        DELETE FROM specialist_chunk_search WHERE rowid = old.rowid;
+        INSERT INTO specialist_chunk_search(rowid, chunk_id, hub_id, chunk_text)
+        VALUES (new.rowid, new.id, new.hub_id, new.chunk_text);
+      END;
+
+      CREATE TRIGGER specialist_chunks_ad AFTER DELETE ON specialist_chunks BEGIN
+        DELETE FROM specialist_chunk_search WHERE rowid = old.rowid;
+      END;
 
       DROP TRIGGER IF EXISTS messages_ai;
       DROP TRIGGER IF EXISTS messages_au;
@@ -1222,6 +1272,48 @@ class ConversationRepository {
         WHERE id = ?
       `)
       .run(JSON.stringify(embedding), embeddingModel, embedding.length, chunkId);
+  }
+
+  // Lexical (BM25) search over a hub's chunks. Complements vector search: exact
+  // terms — clause numbers, drug names, API symbols, error codes — are precisely
+  // what embeddings blur and what BM25 nails. Returns the same shape as the vector
+  // search so the two can be fused (see electron/retrieval.cjs fuseHybrid).
+  searchSpecialistKeyword(hubId, query, limit = 8) {
+    if (!hubId || !query || !query.trim()) {
+      return [];
+    }
+
+    const ftsQuery = toFtsQuery(query);
+    if (!ftsQuery) return [];
+
+    try {
+      return this.db
+        .prepare(`
+          SELECT
+            c.id AS chunkId,
+            c.hub_id AS hubId,
+            c.source_title AS sourceTitle,
+            c.source_url AS sourceUrl,
+            c.chunk_text AS chunkText,
+            c.location,
+            c.page,
+            c.char_start AS charStart,
+            c.char_end AS charEnd,
+            c.source_type AS sourceType,
+            bm25(specialist_chunk_search) AS rank
+          FROM specialist_chunk_search
+          JOIN specialist_chunks c ON c.id = specialist_chunk_search.chunk_id
+          WHERE specialist_chunk_search MATCH @ftsQuery
+            AND specialist_chunk_search.hub_id = @hubId
+          ORDER BY rank
+          LIMIT @limit
+        `)
+        .all({ ftsQuery, hubId, limit });
+    } catch (_error) {
+      // A malformed FTS expression must never break retrieval; vector search alone
+      // still answers.
+      return [];
+    }
   }
 
   searchSpecialistVectorMemory(hubId, queryEmbedding, limit = 5, embeddingModel = null) {
