@@ -573,6 +573,17 @@ there are no distinct Expert turns and no interaction.
 - **Retrieval policy (v1)** — retrieve once per Expert at round 1 and reuse that
   grounding for later rounds; re-retrieving per round is a later refinement (cost).
 
+#### User controls during a discussion (decided 2026-07-24)
+- **Abort** — stops the discussion immediately, keeping the turns already produced.
+- **"Answer now"** — cuts the remaining rounds short and jumps straight to the
+  moderator synthesis. The user is never trapped waiting for round 4.
+- **Early moderator** — if every Expert passes ("nothing further to add") while
+  rounds remain, the moderator wraps up immediately instead of burning turns.
+- **Generous per-turn time limit** — Experts get real time to think; the guard is
+  the user's Abort/Answer-now, not an aggressive timeout that truncates reasoning.
+- **Explicit pass** — an Expert may decline a turn rather than padding with
+  agreement; passes are shown ("Nutrition Expert had nothing to add").
+
 #### Risks to design for — these decide whether it feels good
 1. **Latency multiplies.** N rounds × E Experts + 1 moderator generations
    (4 rounds × 3 Experts = 13). On a 70B this is minutes. Mitigations: let
@@ -686,6 +697,21 @@ app lock; sensitive actions are logged; the link-handling exfil path is closed.
       phone-home required, consistent with the privacy thesis).
 - [ ] **Onboarding / cold-start:** guided first run — check/pull the embedding model,
       help pick a chat model, and build one genuinely useful Expert in <5 min.
+- [ ] **Model management & curated recommendations.** The user always chooses the
+      model (invariant #5); the app's job is to make choosing easy.
+      - **Sortable/filterable model list** — by size, family, and role suitability
+        (fast/small vs accurate/large vs uncensored vs embedding), reading what is
+        actually installed from `/api/tags` plus recorded parameter size.
+      - **Curated recommendations with one-click pull** covering the useful range:
+        a small fast model (background/utility), a mid-size accurate one (chat), an
+        uncensored option (Stance §1 — the user decides what they run), and the
+        embedding model. Show download size and stream pull progress.
+      - **Consent, not auto-download.** Models are multi-GB; silently pulling 3–5 on
+        first run would consume tens of GB of the user's disk and bandwidth without
+        asking. Recommend + one click to accept — never a background pull the user
+        did not choose. (Also lets the app suggest sizes appropriate to their RAM/VRAM.)
+      - **Role defaults** — once models exist, suggest sensible chat / background /
+        embedding assignments, all overridable.
 - [ ] **Starter Experts:** curated, versioned, importable vaults for common domains.
       Solve cold-start AND are a natural **licensing/revenue unit**, defensible where
       the app shell isn't. (Enabled by Stage 1 portable export/import.)
@@ -730,6 +756,35 @@ audit, deployed via one supported path, meeting the compliance bar their industr
 requires.
 
 ---
+
+## 5a. Differentiator shortlist (high value per unit of work)
+
+Candidates evaluated against the crowded local-LLM field (LM Studio, Jan, GPT4All,
+AnythingLLM, Msty, Open WebUI) and NotebookLM. Ranked by value ÷ effort. The wedge
+is **compounding Experts + verifiable citations + deliberation**, not "chat with a
+local model," which is commoditized.
+
+- [ ] **Drop a document straight into the chat (ad-hoc Expert).** Drag a PDF into a
+      conversation and immediately ask about it, without first creating an Expert;
+      offer "keep this as an Expert" afterwards. **Easy** — reuses the whole ingest
+      path. Directly fixes cold-start, which is the biggest adoption risk: it is
+      NotebookLM's best moment and today Sidekick makes you build an Expert first.
+- [ ] **Expert Packs — single-Expert export/import.** Export one Expert (persona +
+      vault + notes + provenance) as a portable file. **Easy** — the full-corpus
+      export already exists; this scopes it to one hub. Unlocks sharing with
+      colleagues, backup, the starter-Expert library, and the natural licensing unit.
+- [ ] **Open the cited page in-app with the passage highlighted.** Clicking a source
+      card opens the PDF at that page and highlights the exact quote, instead of
+      handing off to an external viewer. **Medium** — `pdf.js` already ships
+      transitively via `pdf-parse`. This is what makes precise citations *feel*
+      real, and it is precisely what a lawyer or clinician wants.
+- [ ] **Mark unsupported sentences in an answer.** After generation, flag claims that
+      no retrieved chunk supports, so "grounded" is visible per-claim rather than
+      per-answer. **Medium** (start lexical/entailment-lite, be honest about
+      precision). The strongest possible expression of invariant #1a.
+- [ ] **Keep an Expert current (scheduled research).** Re-run an Expert's research on
+      a cadence and surface what changed. **Medium** — pairs with the Stage 3
+      Research Inbox so new material is staged, not silently trusted.
 
 ## 5b. Go-to-market prerequisites (non-code; needed before monetizing Individual)
 
