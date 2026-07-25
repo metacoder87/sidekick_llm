@@ -437,7 +437,7 @@ Stage 4 packaging.
 
 ---
 
-### STAGE 2 — The brain works  (~6 weeks)  ⟵ IN PROGRESS
+### STAGE 2 — The brain works  ✅ COMPLETE
 *Goal: genuinely better than searching the web — the author's stated bar. Retrieval
 quality is the ceiling on everything; this stage raises it.*
 
@@ -447,16 +447,19 @@ quality is the ceiling on everything; this stage raises it.*
       prompt. Header lists consulted experts; grounding badge reports combined
       matches + contributors; selection persists. Also pulled Deep Research query
       **decomposition** forward (deriveSearchQueries). *Verified live with a 2-expert
-      panel.* Still TODO here: dedup/rerank across vaults (currently top-4 per vault,
-      concatenated), and a shared `RetrievalService` extraction.
-- [ ] **Hybrid retrieval.** Combine FTS5 BM25 (already exists, not wired to vaults)
-      with vector similarity. Naive cosine-top-4 fails on the real questions.
+      panel.* (Cross-vault dedup/rerank and the shared retrieval extraction landed
+      later in this stage — see the reranking and `ContextBuilder` entries below.)
+- [x] **Hybrid retrieval.** Schema v4 adds an FTS5 index over vault chunks;
+      `searchSpecialistKeyword` (BM25) is fused with vector similarity via RRF
+      (`fuseHybrid`) per vault before cross-vault reranking. *Honest note: on three
+      live probes nomic-embed-text already ranked the target first, so the measured
+      gain was precision + insurance, not a dramatic win.*
 - [x] **Reranking pass (score-based v1).** Each vault yields deeper candidates
       (top-8); a pure reranker (`electron/retrieval.cjs`) keeps the globally best few
       across all consulted vaults by similarity score, and grounding is credited by
       actual contribution. *Verified live on a 3-expert panel.* (Cross-encoder / LLM
       reranking remains a possible future upgrade.)
-- [ ] **Precise, verifiable citations (the "cite or shut up" payoff).** Make every
+- [x] **Precise, verifiable citations — DONE.** Make every
       grounded claim traceable to an exact location — critical for the legal/medical
       use cases (invariants #1, #2).
       - **Capture location at ingestion:** chunk PDFs *per page* and store `page`
@@ -477,36 +480,53 @@ quality is the ceiling on everything; this stage raises it.*
         them on new ingests and offer a "re-ingest source" to backfill (the raw
         document/URL is recorded, so this is feasible for files still on disk / URLs
         still reachable).
-- [ ] **Query decomposition** for multi-hop ("does this lab relate to that med?").
-- [ ] **Aggregation queries** ("what does this Expert say about X overall?") — top-k
-      chunks can't summarize a corpus; need map-reduce over the vault.
-- [ ] **Contradiction/absence handling** — hardest retrieval problem, central to the
-      second-opinion use case. A contradiction is *semantically similar* to what it
-      contradicts; similarity alone won't find it. Needs explicit design.
+- [x] **Query decomposition** for multi-hop — `queryPlanner.planRetrievalQueries`
+      splits the question via the background model; results unioned at best score.
+- [x] **Aggregation queries** — `sampleHubChunks` takes an evenly strided sample of
+      the whole vault and `aggregateVault` map-reduces it on the background model,
+      preserving source labels. *Verified: surveyed all 8 chunks where top-k saw 4.*
+- [x] **Contradiction/absence handling (v1)** — classified questions add explicit
+      opposing probes ("evidence against …", "limitations/contraindications …") so
+      disagreeing passages are retrieved, and the prompt directs the model to state
+      conflicts plainly rather than smoothing them over (Stance §1). *Deeper
+      claim-level detection remains a future upgrade.*
 - [~] **Memory that compounds** (fixes the degradation bug) — CORE DONE:
       - [x] dedup on insert (canonical-form match refreshes instead of duplicating);
       - [x] relevance-ranked retrieval (`rankMemoriesByRelevance`), not `slice(0,10)`
             by recency;
-      - [ ] supersede-on-contradiction (needs LLM/semantic detection — deferred);
-      - [ ] editable auto-extracted facts (add/delete exist in the Memory Vault UI;
-            inline edit still TODO);
-      - [ ] decay/staleness. *Verified live: 5 adds w/ 2 dups → 3 stored; relevant
-            fact outranks recent one.*
+      - [x] supersede-on-contradiction (schema v6: candidates pre-filtered by overlap,
+            background model decides; retired facts kept for history, hidden from retrieval);
+      - [x] editable auto-extracted facts (inline edit in the Memory Vault UI);
+      - [x] decay/staleness (reinforcement favours established facts; old
+            unreinforced facts decay). *Verified live: "switched to Ubuntu Linux"
+            retired the Windows fact, kept the unrelated one, preserved history.*
 - [x] **Model routing** (invariant #5): opt-in `backgroundModel` for summaries, fact
       extraction, and research query generation (empty = chat model). Settings UI
       selector. *Verified: routes to the background model when set, falls back
       otherwise.*
-- [ ] **Notes as first-class objects.** User- or model-authored, attached to an
-      Expert, themselves embedded + retrievable. NotebookLM's most-loved feature;
-      how *insight* compounds vs. documents merely piling up. The author explicitly
-      named "create notes from data found in searches."
-- [ ] **Auto-suggest relevant Experts** per question (surfaces the "association" feel).
-- [ ] **Extract `ContextBuilder`** from `sendMessageStream` — testable, the best
-      idea in the codebase, currently a 230-line handler.
+- [x] **Notes as first-class objects.** Schema v5 `notes` table; `indexNote` embeds
+      each note into the vault (source_type=note) and REPLACES its chunks on edit so
+      stale insight never lingers. NotesPanel in the Expert modal plus a "Save as
+      note" action on answers. *Verified: created → retrieved; edited → replaced;
+      deleted → removed from vault.*
+- [x] **Auto-suggest relevant Experts** — un-consulted vaults are probed with the
+      question embedding; clearly-relevant ones (≥0.6) are offered inline, one click
+      to add. *Verified: protein question suggested Nutrition (0.757), stayed silent
+      about Art History.*
+- [x] **Extracted `ContextBuilder`** (`electron/contextBuilder.cjs`) — ipc.cjs
+      729 → 502 lines; 4 tests exercise the whole pipeline in isolation.
 
 **STAGE 2 EXIT:** on a real topic the author uses, consulting Experts beats a web
 search for accuracy + trust; memory measurably improves over a month instead of
 degrading.
+
+**STATUS (2026-07-24): all planned Stage 2 items implemented and verified.** Test
+suite 25 → 50. The exit criterion is a *usage* judgement, not a code one — it is
+met when the author has run real work through it for a while. Known follow-ups
+carried forward rather than blocking: cross-encoder/LLM reranking (score-based v1
+shipped), claim-level contradiction detection (probe-based v1 shipped), and
+backfilling citation provenance for chunks ingested before schema v3 (new ingests
+capture it; a "re-ingest source" action would repair older ones).
 
 ---
 
