@@ -264,6 +264,48 @@ Key refactors implied: pull `ContextBuilder` and `RetrievalService` out of
 
 ---
 
+## 4b. Editions & shipping strategy (decided 2026-07-24)
+
+**Two editions, and Enterprise is a *superset* of Individual — not a different
+feature bucket.** A common mistake is to file general product work (licensing,
+legal, crash reporting, sqlite-vec, CI, accessibility, onboarding) under
+"Enterprise." All of that belongs to the **base/Individual** product; Enterprise
+adds a multi-user layer on top.
+
+| | **Individual edition** (ship first) | **Enterprise edition** (adds, later) |
+|---|---|---|
+| Users | single user per install | multiple users, accounts |
+| Access | app-lock + personal audit log | **RBAC**, SSO, org-level audit/compliance |
+| Data | local, per-user encrypted corpus | multi-tenant isolation; likely a **server/sync** layer |
+| Delivery | signed desktop installers + auto-update (electron-builder), desktop icon | **Docker / central IT deployment**; managed updates |
+| Regulatory | personal use of one's own data | HIPAA/PHI scope, security reviews, SOC 2, DPAs |
+| Everything else | ✅ all base features | ✅ inherits all of them |
+
+So licensing, legal disclaimers, crash reporting, sqlite-vec, CI/lint,
+accessibility, and onboarding are **Individual (Stage 5)**, inherited by Enterprise.
+Only RBAC, multi-user identity/tenancy, the server/sync layer, and Docker/central
+deployment are **Enterprise-specific** — a separate future track, gated on the
+business-model decision (open question #4).
+
+**Strategy: ship Individual first, then build Enterprise on top.** The Individual
+product is the validated core and the foundation Enterprise extends; shipping it
+first yields revenue, real users, feedback, and a reference base that de-risks the
+much larger Enterprise investment (server, multi-tenancy, compliance, sales). See
+the **Minimum shippable v1** bar below.
+
+### Minimum shippable v1 (Individual) — the gate to first release
+Not all of Stage 5 is required to ship. The v1 bar is:
+- **Stage 4 security is non-negotiable IF medical/legal use is marketed:** encryption
+  at rest + app-lock + the link-handling fix. (Shipping unencrypted while inviting
+  users to store medical records is a liability.)
+- **Precise citations** (Stage 2) — the core trust promise; ship with it.
+- From Stage 5: **packaging + code signing + auto-update**, **license activation**,
+  **legal (EULA + disclaimers)**, **basic crash reporting**, **onboarding**, and
+  **CI/lint** (cheap, protects quality).
+- **Can defer past v1:** sqlite-vec (until users hit ~10k+ chunks), full
+  accessibility (do incrementally), multi-platform (start on one OS), starter-Expert
+  marketplace.
+
 ## 5. The stages
 
 Effort estimates are rough and assume the author + this assistant. Each stage ends
@@ -273,6 +315,10 @@ with an explicit **exit criterion** — do not advance until it's met.
 > before any migration or bulk re-embed. The retrieval *interface* is designed for
 > multi-Expert in Stage 1 even though the multi-Expert *UI* ships in Stage 2 —
 > retrofitting single→federated means touching the same code twice.
+>
+> **Editions note:** Stages 1–5 build the **Individual** edition. A future
+> **Stage 6 — Enterprise** (RBAC, multi-user, server/sync, Docker deployment) is
+> deliberately deferred; see §4b and open question #4.
 
 ---
 
@@ -410,6 +456,27 @@ quality is the ceiling on everything; this stage raises it.*
       across all consulted vaults by similarity score, and grounding is credited by
       actual contribution. *Verified live on a 3-expert panel.* (Cross-encoder / LLM
       reranking remains a possible future upgrade.)
+- [ ] **Precise, verifiable citations (the "cite or shut up" payoff).** Make every
+      grounded claim traceable to an exact location — critical for the legal/medical
+      use cases (invariants #1, #2).
+      - **Capture location at ingestion:** chunk PDFs *per page* and store `page`
+        (+ char offset within the page); for web, keep the URL and the exact quote;
+        for text/md, store char range. New `specialist_chunks` columns: `location`
+        (human label, e.g. "p. 12" / "§3.2"), `page`, `char_start`, `char_end`.
+      - **Render source cards from the retrieved chunks, not the model's text** —
+        precision is guaranteed regardless of what the model writes (NotebookLM
+        model). Each card: exact quoted chunk · Expert · document/source title ·
+        location · deep link.
+      - **Deep links:** web → text-fragment URL (`…#:~:text=<exact quote>`) that
+        scrolls to and highlights the sentence; local PDF → open at `page` (needs a
+        viewer — the pdf-viewer surface or an embedded one). **Depends on the
+        `setWindowOpenHandler` fix (Stage 4) since these links are clickable.**
+      - Reuse/extend `CitationsList`; add a specialist-sources card list driven by
+        `specialistGrounding` + the selected chunks' provenance.
+      - Migration + re-ingestion note: existing chunks lack `page`/offsets; capture
+        them on new ingests and offer a "re-ingest source" to backfill (the raw
+        document/URL is recorded, so this is feasible for files still on disk / URLs
+        still reachable).
 - [ ] **Query decomposition** for multi-hop ("does this lab relate to that med?").
 - [ ] **Aggregation queries** ("what does this Expert say about X overall?") — top-k
       chunks can't summarize a corpus; need map-reduce over the vault.
@@ -462,28 +529,138 @@ Experts; no unvetted content ever silently entered a vault.
 
 ---
 
-### STAGE 4 — Product  (~6 weeks; gate behind months of personal use)
-*Goal: safely shippable to strangers on their own machines.*
+### STAGE 4 — Security, Privacy & Compliance  (~5–6 weeks; gate behind months of use)
+*Goal: the corpus is safe at rest and access is accountable — the precondition for
+trusting Sidekick with medical records, legal contracts, and other sensitive data,
+and a hard prerequisite for any distribution.*
 
-- [ ] **Security hardening:** `setWindowOpenHandler` + `will-navigate` guard;
-      external links via `shell.openExternal`; revisit `sandbox`; tighten CSP.
-- [ ] **Encryption at rest** (Electron `safeStorage` or SQLCipher). **Blocks
-      distribution — personal medical records unencrypted is a liability the moment
-      you ship.** Must precede v1.0, not follow it.
-- [ ] **Packaging:** electron-builder/forge, icons, code signing, auto-update.
-      (`npm run build` currently compiles only the renderer.)
-- [ ] **Onboarding / cold-start.** New user = 0 Experts + a local 7B *worse than free
-      ChatGPT*. Need one genuinely useful Expert built in <5 min, NotebookLM-style.
-- [ ] **Starter Experts.** Curated, versioned, importable vaults for common domains.
-      Solves cold start, is a natural **licensing unit**, defensible where the app
-      shell isn't. (Enabled by Stage 1 portable export.)
-- [ ] **Licensing + liability framing**, especially medical/legal disclaimers tied to
-      invariant #9.
-- [ ] Reconcile all docs (README, case_study, sidekick_plan) with shipped reality —
-      no past-tense descriptions of unbuilt behavior.
+- [ ] **Close the Electron link-handling gap (do FIRST — also gates precise
+      citations).** Add `setWindowOpenHandler` + a `will-navigate` guard; open
+      external links via `shell.openExternal`; deny in-app navigation to remote
+      origins; revisit `sandbox: true`; tighten CSP. *Today a clicked link opens a
+      window that inherits the preload bridge (`window.sidekick`) — a data-exfil
+      path. Flagged in the original audit; still open.*
+- [ ] **Encryption at rest (SQLCipher-class).** Encrypt the database, its WAL, and
+      the pre-migration backups.
+      - **Library:** `better-sqlite3-multiple-ciphers` (drop-in for `better-sqlite3`,
+        bundles AES-256 / SQLCipher-compatible). Industry-standard and the cleanest
+        path here; plain `better-sqlite3` cannot do SQLCipher natively.
+      - **Key management:** derive the key from a user passphrase via a KDF
+        (scrypt/argon2/PBKDF2); optionally cache via Electron `safeStorage`
+        (OS keychain) for convenience. The key is never stored in plaintext.
+      - **Migration:** rekey the existing plaintext DB in place (or export→import
+        into an encrypted DB) on first upgrade, behind the backup.
+      - **Threat model (state it honestly):** protects a *stolen laptop / copied
+        `.db` / stolen backup*. It does **not** protect against malware running as
+        the user. JSON corpus exports are plaintext by design → offer an encrypted
+        export option and mark plain exports as sensitive.
+- [ ] **App lock (single-user local gate).** Passphrase (and/or OS biometric via
+      `safeStorage`) to open the app; the passphrase derives the encryption key.
+      This is *device/data protection*, not multi-user auth. Configurable
+      auto-lock-on-idle.
+- [ ] **Audit log.** Append-only `audit_log` table recording sensitive actions
+      (corpus open, export/import, delete, Expert train/re-index, settings change,
+      integrity events) with timestamp + details; optional hash-chain for
+      tamper-evidence; a viewer + export in the UI. Directly serves the
+      legal/medical compliance narrative.
+- [ ] **Dependency & supply-chain hygiene:** `npm audit` in CI, pinned/locked deps,
+      review of any new native modules.
 
-**STAGE 4 EXIT:** a stranger installs, is useful in 5 minutes, data is encrypted,
-app is signed + auto-updating, medical/legal framing is explicit and safe.
+> **PRODUCT-DIRECTION DECISION — RBAC / multi-user (do NOT build speculatively).**
+> Role-based access control implies *multiple users with differentiated
+> permissions*, which contradicts the pure-local, single-user, "you own it" thesis.
+> It only makes sense if Sidekick pivots to **organizations** (a firm/clinic), and
+> that is a *different, larger product*: multi-tenant data model, almost certainly a
+> server/sync layer, per-user encryption boundaries, and a genuine multi-user threat
+> model — plus regulatory scope (e.g. HIPAA if handling others' PHI). Recommendation:
+> ship **app-lock + audit log** for the personal product; treat **RBAC + multi-user**
+> as a deliberately-scoped **"Teams / Enterprise edition"** decision, not a bolt-on.
+
+**STAGE 4 EXIT:** the corpus is encrypted at rest (incl. WAL + backups) behind an
+app lock; sensitive actions are logged; the link-handling exfil path is closed.
+
+---
+
+### STAGE 5 — Distribution & Commercialization  (scope depends on business model)
+*Goal: a stranger can buy, install, trust, and run it — and you can support it.*
+
+- [ ] **Packaging & delivery:** electron-builder/forge, app icons, installers,
+      **code signing** (Windows Authenticode + macOS notarization), **auto-update**,
+      and **multi-platform builds** (Win/Mac/Linux) for market reach.
+- [ ] **License activation:** offline-verifiable signed license files / keys (no
+      phone-home required, consistent with the privacy thesis).
+- [ ] **Onboarding / cold-start:** guided first run — check/pull the embedding model,
+      help pick a chat model, and build one genuinely useful Expert in <5 min.
+- [ ] **Starter Experts:** curated, versioned, importable vaults for common domains.
+      Solve cold-start AND are a natural **licensing/revenue unit**, defensible where
+      the app shell isn't. (Enabled by Stage 1 portable export/import.)
+- [ ] **Performance at scale:** replace the O(n) full-scan + `JSON.parse`-per-row
+      vector search with `sqlite-vec` (or an ANN index) and `Float32Array` BLOB
+      vectors; remove the FTS rebuild-on-boot. Needed once vaults reach 10k+ chunks.
+- [ ] **Opt-in, local-first telemetry & crash reporting.** You can't support blind
+      software — but it must be off by default, transparent, and privacy-preserving.
+- [ ] **Legal:** EULA, privacy policy, and explicit **medical/legal disclaimers**
+      ("not professional advice"; the app presents grounded facts, the user decides —
+      Stance §1 / invariant #9). Consider jurisdictional review before marketing
+      medical/legal use cases.
+- [ ] **Quality gates:** ESLint + Prettier + CI (test + lint + `npm audit` on every
+      change); consider incremental TypeScript for the IPC/repository boundary.
+- [ ] **Accessibility & polish:** keyboard navigation, screen-reader labels, focus
+      management; user-facing help/docs (distinct from CONTRIBUTING.md).
+
+**STAGE 5 EXIT:** signed, auto-updating installers on ≥2 platforms; a licensed user
+is productive in 5 minutes; performance holds at 10k+ chunks; legal + support basics
+are in place.
+
+---
+
+### STAGE 6 — Enterprise edition  (DEFERRED — gated on business model, open Q#4)
+*A separate, larger product built ON TOP of the Individual base. Do not start until
+Individual has shipped and validated demand.*
+
+- [ ] **Multi-user identity & accounts** — the data-model shift from single-user to
+      multi-tenant; per-user encryption boundaries.
+- [ ] **RBAC** — roles/permissions over Experts, corpora, and actions.
+- [ ] **Server / sync layer** — almost certainly required for shared team Experts,
+      central audit, and cross-device access (a major architectural addition to a
+      currently pure-local app).
+- [ ] **Deployment** — Docker image / single-command startup for self-hosting, or
+      central IT-managed desktop rollout (MSI + policy); managed updates.
+- [ ] **Org compliance** — org-wide audit/reporting, SSO/SAML, SOC 2, DPAs, and
+      HIPAA scope if handling others' PHI (triggers a real regulatory program).
+- [ ] **Shared/curated team Experts** and admin governance.
+
+**STAGE 6 EXIT:** a team can be provisioned with roles, shared Experts, and central
+audit, deployed via one supported path, meeting the compliance bar their industry
+requires.
+
+---
+
+## 5b. Go-to-market prerequisites (non-code; needed before monetizing Individual)
+
+Engineering isn't the only gate to revenue. These are commonly missed:
+
+- **Pricing model.** A local, server-less app fits a **one-time license** or
+  **paid major-version upgrades** better than a subscription (users will ask "what
+  am I paying monthly for if it runs on my machine?"). Decide before building
+  activation.
+- **Payments + tax.** Use a **merchant-of-record** (Paddle, Lemon Squeezy, Gumroad)
+  so global VAT/sales-tax and refunds are handled for you — significant for a solo
+  seller. Stripe alone leaves tax compliance to you.
+- **Trial / freemium mechanism.** Time-limited trial or a capped free tier to lower
+  the adoption barrier (cold-start makes "try before buy" important).
+- **Landing page + demo** (video or interactive) and a clear **positioning wedge.**
+- **Competitive differentiation — be honest about the crowded field.** Local
+  LLM + document-RAG desktop apps already exist (LM Studio, Jan, GPT4All,
+  AnythingLLM, Msty). Sidekick's defensible wedge is the **compounding Experts
+  (notebooks that grow), precise verifiable citations, and the "private advocate"
+  framing for high-stakes domains (legal/medical)** — sharpen and lead with this,
+  don't compete on "chat with a local model," which is commoditized.
+- **Support + feedback channel** (email/Discord), a **changelog**, and a **refund
+  policy.**
+- **Model guidance in onboarding** — you don't ship models (Ollama does); the first
+  run must gracefully handle "no models installed" and recommend sizes for the
+  user's hardware.
 
 ---
 
@@ -505,6 +682,16 @@ app is signed + auto-updating, medical/legal framing is explicit and safe.
    the provider ([`ipc.cjs:238`](electron/ipc.cjs)). For a "privacy-first" app,
    consider deriving a search query instead, and disclosing at the toggle. (Still
    open — gates Stage 3/4.)
+4. **Single-user vs. multi-user product?** (Gates Stage 4 RBAC and much of Stage 5.)
+   The current thesis is pure-local, single-user, "you own it." Monetizing to
+   *individuals* keeps that shape (app-lock + audit log + encryption suffice).
+   Monetizing to *organizations* (firms/clinics) requires multi-user + RBAC, which
+   implies a server/sync layer, per-user encryption boundaries, and regulatory scope
+   (HIPAA/PHI) — effectively a separate **Teams/Enterprise** product. **Decide the
+   business model before building auth**, because it determines whether "auth" means
+   a local app-lock or a full identity/permission system. (Author raised RBAC +
+   audit + encryption on 2026-07-24; encryption + audit + app-lock are scheduled in
+   Stage 4, RBAC deferred pending this decision.)
 
 ---
 
@@ -518,4 +705,3 @@ app is signed + auto-updating, medical/legal framing is explicit and safe.
 - **Verify claims at runtime.** The §2 bugs were *reproduced*, not guessed. Hold new
   claims to the same bar before acting on them.
 - **Update this file when direction changes.** A stale roadmap is worse than none.
-```
