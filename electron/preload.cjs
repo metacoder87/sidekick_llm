@@ -58,6 +58,12 @@ contextBridge.exposeInMainWorld('sidekick', {
     start: (payload) => ipcRenderer.invoke(channels.research.start, payload),
     ingestFile: (payload) => ipcRenderer.invoke(channels.research.ingestFile, payload),
   },
+  notes: {
+    list: (hubId) => ipcRenderer.invoke(channels.notes.list, hubId),
+    create: (payload) => ipcRenderer.invoke(channels.notes.create, payload),
+    update: (payload) => ipcRenderer.invoke(channels.notes.update, payload),
+    delete: (id) => ipcRenderer.invoke(channels.notes.delete, id),
+  },
   events: {
     onStreamUpdate: (listener) => subscribe(channels.events.streamUpdate, listener),
     onStreamComplete: (listener) => subscribe(channels.events.streamComplete, listener),

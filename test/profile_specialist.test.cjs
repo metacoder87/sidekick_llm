@@ -103,6 +103,41 @@ test('deepResearch chunkText splits large text into overlapping chunks', () => {
   assert.ok(chunks[0].includes('Alpha'));
 });
 
+test('notes are embedded into the vault, re-indexed on edit, and removed on delete', async () => {
+  const repository = new ConversationRepository(':memory:');
+  const model = repository.getSetting('embeddingModel');
+  const ollama = { generateEmbedding: async () => new Array(768).fill(0.02) };
+  const worker = new DeepResearchWorker({ repository, ollama });
+  const hub = repository.createSpecialistHub({ name: 'Notes Hub' });
+
+  // Create → indexed as retrievable vault knowledge, tagged as a note.
+  const note = repository.createNote({ hubId: hub.id, title: 'Key finding', body: 'Consistency matters more than timing for supplementation.' });
+  const created = await worker.indexNote({ note, embeddingModel: model });
+  assert.equal(created.success, true);
+  assert.ok(created.chunksCount >= 1);
+
+  const query = new Array(768).fill(0.02);
+  let hits = repository.searchSpecialistVectorMemory(hub.id, query, 8, model);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].sourceType, 'note');
+  assert.equal(hits[0].sourceUrl, `note://${note.id}`);
+
+  // Edit → old chunks are REPLACED, not appended (no stale knowledge lingering).
+  repository.updateNote({ id: note.id, body: 'Revised: five grams daily is sufficient.' });
+  await worker.indexNote({ note: repository.getNote(note.id), embeddingModel: model });
+  hits = repository.searchSpecialistVectorMemory(hub.id, query, 8, model);
+  assert.equal(hits.length, 1, 'editing a note must not duplicate its chunks');
+  assert.ok(hits[0].chunkText.includes('five grams daily'));
+  assert.ok(!hits[0].chunkText.includes('Consistency matters more'));
+
+  // Delete → removed from the vault so it stops influencing answers.
+  assert.equal(repository.deleteNote(note.id), true);
+  assert.equal(repository.searchSpecialistVectorMemory(hub.id, query, 8, model).length, 0);
+  assert.equal(repository.countNotes(hub.id), 0);
+
+  repository.close();
+});
+
 test('specialist hub reports retrievable vs total chunk counts by current embedding model', () => {
   const repository = new ConversationRepository(':memory:');
   const model = repository.getSetting('embeddingModel'); // nomic-embed-text

@@ -406,6 +406,65 @@ class DeepResearchWorker {
     return { success: true, totalChunks, totalFailed };
   }
 
+  // Embed (or re-embed) a note into its Expert's vault so the user's own insight is
+  // retrievable alongside ingested documents. Idempotent: existing chunks for the
+  // note are replaced, so editing a note updates what the model can retrieve
+  // (ROADMAP Stage 2 — Notes as first-class objects).
+  async indexNote({ note, embeddingModel, onProgress = () => {} }) {
+    if (!note || !note.body || !note.body.trim()) {
+      return { success: false, reason: 'Note is empty.', chunksCount: 0 };
+    }
+
+    this.repository.deleteNoteChunks(note.id);
+
+    // Prefix the title so the note's subject is part of the embedded text.
+    const text = note.title ? `${note.title}\n${note.body}` : note.body;
+    let pieces = chunkTextWithOffsets(text);
+    if (pieces.length === 0) {
+      const normalized = text.replace(/\s+/g, ' ').trim();
+      pieces = [{ text: normalized, charStart: 0, charEnd: normalized.length }];
+    }
+
+    let indexed = 0;
+    let failed = 0;
+    for (const piece of pieces) {
+      let embedding = null;
+      try {
+        embedding = await this.ollama.generateEmbedding({ model: embeddingModel, input: piece.text });
+      } catch (_e) {
+        embedding = null;
+      }
+
+      if (!Array.isArray(embedding) || embedding.length === 0) {
+        failed++;
+        continue;
+      }
+
+      this.repository.saveSpecialistChunk({
+        hubId: note.hubId,
+        sourceTitle: `Note: ${note.title}`,
+        sourceUrl: `note://${note.id}`,
+        chunkText: piece.text,
+        embedding,
+        embeddingModel,
+        location: note.author === 'model' ? 'saved from a conversation' : 'your note',
+        charStart: piece.charStart,
+        charEnd: piece.charEnd,
+        sourceType: 'note',
+      });
+      indexed++;
+    }
+
+    if (indexed === 0) {
+      const reason = `Saved the note, but could not embed it — check that the embedding model "${embeddingModel}" is installed and supports embeddings.`;
+      onProgress({ status: 'error', message: reason });
+      return { success: false, reason, chunksCount: 0, chunksFailed: failed };
+    }
+
+    onProgress({ status: 'complete', message: `Note indexed into the vault (${indexed} chunks).` });
+    return { success: true, chunksCount: indexed, chunksFailed: failed };
+  }
+
   // Repair a vault by re-embedding every chunk that isn't already indexed with the
   // current embedding model (legacy NULL-model rows, or rows from a prior model).
   // Cheap because chunk_text is already stored — no re-scraping or re-upload needed

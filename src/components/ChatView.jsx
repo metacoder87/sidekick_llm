@@ -72,7 +72,51 @@ function CodeBlock({ language, code }) {
   );
 }
 
-function MessageBubble({ message }) {
+// Turns an answer into durable, retrievable knowledge on one of the consulting
+// Experts — the "create notes from what you found" loop.
+function SaveAsNote({ message, experts, onSaveNote }) {
+  const [target, setTarget] = useState(experts[0]?.id || '');
+  const [state, setState] = useState('idle');
+
+  if (experts.length === 0 || !onSaveNote) return null;
+
+  async function save() {
+    setState('saving');
+    try {
+      const result = await onSaveNote({ hubId: target || experts[0].id, content: message.content });
+      setState(result && result.indexed === false ? 'partial' : 'saved');
+    } catch (_e) {
+      setState('error');
+    }
+  }
+
+  return (
+    <div className="save-note-row">
+      {experts.length > 1 ? (
+        <select value={target} onChange={(e) => setTarget(e.target.value)} disabled={state === 'saving'}>
+          {experts.map((expert) => (
+            <option key={expert.id} value={expert.id}>
+              {expert.name}
+            </option>
+          ))}
+        </select>
+      ) : null}
+      <button type="button" className="ghost-button" onClick={save} disabled={state === 'saving'}>
+        {state === 'saved'
+          ? '✓ Saved as note'
+          : state === 'partial'
+            ? '⚠️ Saved, not indexed'
+            : state === 'error'
+              ? 'Save failed — retry'
+              : state === 'saving'
+                ? 'Saving…'
+                : `📝 Save as note${experts.length === 1 ? ` to ${experts[0].name}` : ''}`}
+      </button>
+    </div>
+  );
+}
+
+function MessageBubble({ message, experts = [], onSaveNote }) {
   return (
     <article className={`message ${message.role}`}>
       <div className="message__meta">
@@ -96,6 +140,9 @@ function MessageBubble({ message }) {
           <GroundingBadge grounding={message.specialistGrounding} />
           <SourceCards sources={message.specialistGrounding.sources} />
         </>
+      ) : null}
+      {message.role === 'assistant' && message.content && message.status !== 'streaming' ? (
+        <SaveAsNote message={message} experts={experts} onSaveNote={onSaveNote} />
       ) : null}
     </article>
   );
@@ -129,6 +176,7 @@ export default function ChatView({
   streamRequestId,
   activeSpecialists = [],
   onExportConversation,
+  onSaveNote,
 }) {
   if (!conversation) {
     return (
@@ -175,7 +223,12 @@ export default function ChatView({
           </div>
         ) : null}
         {conversation.messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
+          <MessageBubble
+            key={message.id}
+            message={message}
+            experts={activeSpecialists}
+            onSaveNote={onSaveNote}
+          />
         ))}
       </div>
     </section>

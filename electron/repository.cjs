@@ -7,7 +7,7 @@ const { randomUUID } = require('node:crypto');
 // MIGRATIONS whenever the schema changes. The corpus is the project's asset
 // (see ROADMAP.md §3) — every migration runs behind a backup and an integrity
 // check so a bad upgrade can never destroy user data.
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 const MAX_BACKUPS = 5;
 
 const DEFAULT_TITLE = 'New conversation';
@@ -274,6 +274,28 @@ class ConversationRepository {
           `);
         },
       },
+      {
+        // Notes: first-class, editable knowledge authored by the user or the model
+        // and attached to an Expert. Unlike ingested documents (which are immutable
+        // sources), a note is the place where the user's own *insight* accumulates —
+        // it is itself embedded into the vault so it becomes retrievable knowledge.
+        version: 5,
+        up: () => {
+          this.db.exec(`
+            CREATE TABLE IF NOT EXISTS notes (
+              id TEXT PRIMARY KEY,
+              hub_id TEXT NOT NULL,
+              title TEXT NOT NULL,
+              body TEXT NOT NULL,
+              author TEXT NOT NULL DEFAULT 'user',
+              source_conversation_id TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              FOREIGN KEY (hub_id) REFERENCES specialist_hubs(id) ON DELETE CASCADE
+            );
+          `);
+        },
+      },
     ];
 
     // Guard against drift: the migration list must reach the declared version.
@@ -394,6 +416,20 @@ class ConversationRepository {
       CREATE VIRTUAL TABLE IF NOT EXISTS conversation_search USING fts5(
         conversation_id UNINDEXED,
         title
+      );
+
+      -- Notes: editable, first-class knowledge attached to an Expert (user- or
+      -- model-authored). Embedded into the vault so insight becomes retrievable.
+      CREATE TABLE IF NOT EXISTS notes (
+        id TEXT PRIMARY KEY,
+        hub_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        author TEXT NOT NULL DEFAULT 'user',
+        source_conversation_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (hub_id) REFERENCES specialist_hubs(id) ON DELETE CASCADE
       );
 
       -- Lexical index over Expert vault chunks, for hybrid (BM25 + vector) retrieval.
@@ -1272,6 +1308,97 @@ class ConversationRepository {
         WHERE id = ?
       `)
       .run(JSON.stringify(embedding), embeddingModel, embedding.length, chunkId);
+  }
+
+  // ---- Notes -------------------------------------------------------------------
+  // A note is an editable source document owned by the user. Its retrievable
+  // projection lives in specialist_chunks (source_type='note', source_url
+  // 'note://<id>'), which the worker rebuilds whenever the note text changes.
+
+  createNote({ hubId, title, body, author = 'user', conversationId = null }) {
+    const trimmedBody = (body || '').trim();
+    if (!trimmedBody) {
+      throw new Error('Note body cannot be empty.');
+    }
+    const timestamp = now();
+    const note = {
+      id: randomUUID(),
+      hubId,
+      title: (title || '').trim() || trimmedBody.slice(0, 60),
+      body: trimmedBody,
+      author,
+      sourceConversationId: conversationId,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+
+    this.db
+      .prepare(`
+        INSERT INTO notes (id, hub_id, title, body, author, source_conversation_id, created_at, updated_at)
+        VALUES (@id, @hubId, @title, @body, @author, @sourceConversationId, @createdAt, @updatedAt)
+      `)
+      .run(note);
+
+    this.db.prepare(`UPDATE specialist_hubs SET updated_at = ? WHERE id = ?`).run(timestamp, hubId);
+    return note;
+  }
+
+  listNotes(hubId) {
+    return this.db
+      .prepare(`
+        SELECT
+          id, hub_id AS hubId, title, body, author,
+          source_conversation_id AS sourceConversationId,
+          created_at AS createdAt, updated_at AS updatedAt
+        FROM notes
+        WHERE hub_id = ?
+        ORDER BY updated_at DESC
+      `)
+      .all(hubId);
+  }
+
+  getNote(id) {
+    return this.db
+      .prepare(`
+        SELECT
+          id, hub_id AS hubId, title, body, author,
+          source_conversation_id AS sourceConversationId,
+          created_at AS createdAt, updated_at AS updatedAt
+        FROM notes WHERE id = ?
+      `)
+      .get(id);
+  }
+
+  updateNote({ id, title, body }) {
+    const timestamp = now();
+    this.db
+      .prepare(`
+        UPDATE notes
+        SET title = COALESCE(@title, title),
+            body = COALESCE(@body, body),
+            updated_at = @timestamp
+        WHERE id = @id
+      `)
+      .run({ id, title: title ?? null, body: body ?? null, timestamp });
+    return this.getNote(id);
+  }
+
+  // Removing a note also removes its retrievable chunks, so deleted insight stops
+  // influencing answers immediately.
+  deleteNote(id) {
+    const note = this.getNote(id);
+    if (!note) return false;
+    this.deleteNoteChunks(id);
+    const result = this.db.prepare(`DELETE FROM notes WHERE id = ?`).run(id);
+    return result.changes > 0;
+  }
+
+  deleteNoteChunks(noteId) {
+    this.db.prepare(`DELETE FROM specialist_chunks WHERE source_url = ?`).run(`note://${noteId}`);
+  }
+
+  countNotes(hubId) {
+    return this.db.prepare(`SELECT COUNT(*) AS count FROM notes WHERE hub_id = ?`).get(hubId).count;
   }
 
   // Lexical (BM25) search over a hub's chunks. Complements vector search: exact

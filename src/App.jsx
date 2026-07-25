@@ -431,6 +431,28 @@ export default function App() {
     await sidekick.chat.cancelGeneration(streamRequestId);
   }
 
+  // Turn an assistant answer into a durable, retrievable note on an Expert. This is
+  // how research findings become permanent knowledge instead of scrolling away.
+  async function handleSaveNote({ hubId, content }) {
+    if (!sidekick || !hubId || !content) return null;
+
+    const firstLine = content.replace(/[#*`>]/g, '').split('\n').map((s) => s.trim()).find(Boolean) || 'Saved answer';
+    const result = await sidekick.notes.create({
+      hubId,
+      title: firstLine.slice(0, 70),
+      body: content,
+      author: 'model',
+      conversationId: activeConversationId,
+    });
+
+    setNotice(
+      result.indexed
+        ? `Saved as a note and indexed into the Expert's vault.`
+        : `Note saved, but not indexed: ${result.reason || 'embedding unavailable'}`,
+    );
+    return result;
+  }
+
   async function handleExportConversation(conversationId) {
     if (!sidekick) {
       return;
@@ -546,6 +568,7 @@ export default function App() {
             streamRequestId={streamRequestId}
             activeSpecialists={activeSpecialistHubs}
             onExportConversation={handleExportConversation}
+            onSaveNote={handleSaveNote}
           />
         </div>
 

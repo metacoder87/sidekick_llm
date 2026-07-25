@@ -94,6 +94,42 @@ function registerIpcHandlers({ userDataPath }) {
     return { success };
   });
 
+  // Notes: editable knowledge attached to an Expert. Every write re-embeds the note
+  // so what the model can retrieve always matches what the user wrote.
+  ipcMain.handle(channels.notes.list, async (_event, hubId) => {
+    return repository.listNotes(hubId);
+  });
+
+  ipcMain.handle(channels.notes.create, async (_event, payload) => {
+    const embeddingModel = repository.getSetting('embeddingModel');
+    const preflight = await ollama.checkEmbedding(embeddingModel);
+    const note = repository.createNote(payload);
+    if (!preflight.ok) {
+      return { note, indexed: false, reason: preflight.reason };
+    }
+    const result = await researchWorker.indexNote({ note, embeddingModel });
+    return { note, indexed: result.success, reason: result.reason, chunksCount: result.chunksCount };
+  });
+
+  ipcMain.handle(channels.notes.update, async (_event, payload) => {
+    const note = repository.updateNote(payload);
+    if (!note) {
+      throw new Error('Note not found.');
+    }
+    const embeddingModel = repository.getSetting('embeddingModel');
+    const preflight = await ollama.checkEmbedding(embeddingModel);
+    if (!preflight.ok) {
+      return { note, indexed: false, reason: preflight.reason };
+    }
+    const result = await researchWorker.indexNote({ note, embeddingModel });
+    return { note, indexed: result.success, reason: result.reason, chunksCount: result.chunksCount };
+  });
+
+  ipcMain.handle(channels.notes.delete, async (_event, id) => {
+    const success = repository.deleteNote(id);
+    return { success };
+  });
+
   ipcMain.handle(channels.specialist.reindex, async (event, { hubId }) => {
     const embeddingModel = repository.getSetting('embeddingModel');
     const preflight = await ollama.checkEmbedding(embeddingModel);

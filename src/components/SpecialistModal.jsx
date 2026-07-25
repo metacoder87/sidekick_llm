@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import NotesPanel from './NotesPanel';
 
 // Turn a worker/IPC result into an honest status line. Never claims success for a
 // failed or zero-result operation (ROADMAP §5 Phase 3 — no silent success, no
@@ -341,6 +342,14 @@ export default function SpecialistModal({
               </button>
             </div>
           </div>
+
+          {isEditing ? (
+            <NotesPanel
+              sidekick={sidekick}
+              hubId={hubToEdit.id}
+              onChanged={() => refreshHubStats(hubToEdit.id)}
+            />
+          ) : null}
 
           <div className="modal-actions">
             <button type="button" className="secondary-button" onClick={onClose}>

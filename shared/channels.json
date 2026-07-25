@@ -48,6 +48,12 @@
     "start": "research:start",
     "ingestFile": "research:ingestFile"
   },
+  "notes": {
+    "list": "notes:list",
+    "create": "notes:create",
+    "update": "notes:update",
+    "delete": "notes:delete"
+  },
   "events": {
     "streamUpdate": "events:chat-stream-update",
     "streamComplete": "events:chat-stream-complete",
