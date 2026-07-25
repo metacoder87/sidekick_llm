@@ -980,3 +980,13 @@ button {
   width: 100%;
   font-size: 0.85rem;
 }
+
+.expert-suggestions {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  opacity: 0.85;
+}

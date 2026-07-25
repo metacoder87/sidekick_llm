@@ -91,6 +91,20 @@ test('fuseHybrid (RRF) rewards chunks ranked well in BOTH vector and keyword lis
   assert.equal(typeof fused.find((f) => f.chunkId === 'kwOnly').score, 'number');
 });
 
+test('suggestExperts proposes only clearly-relevant un-consulted Experts', () => {
+  const { suggestExperts } = require('../electron/retrieval.cjs');
+  const groups = [
+    { expert: { id: 'nut', name: 'Nutrition Expert' }, matches: [{ score: 0.81 }, { score: 0.4 }] },
+    { expert: { id: 'art', name: 'Art History Expert' }, matches: [{ score: 0.31 }] },
+    { expert: { id: 'empty', name: 'Empty Expert' }, matches: [] },
+  ];
+
+  const suggestions = suggestExperts(groups);
+  assert.equal(suggestions.length, 1, 'weak and empty vaults must not become noise');
+  assert.equal(suggestions[0].id, 'nut');
+  assert.equal(suggestions[0].score, 0.81, 'ranked by the best match in the vault');
+});
+
 test('fuseHybrid tolerates an empty side (vector-only or keyword-only)', () => {
   const vecOnly = fuseHybrid([{ chunkId: 'a', score: 0.9 }], [], 5);
   assert.equal(vecOnly.length, 1);

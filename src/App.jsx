@@ -569,6 +569,7 @@ export default function App() {
             activeSpecialists={activeSpecialistHubs}
             onExportConversation={handleExportConversation}
             onSaveNote={handleSaveNote}
+            onAddExpert={handleSelectSpecialist}
           />
         </div>
 

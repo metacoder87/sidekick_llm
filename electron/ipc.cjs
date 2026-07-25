@@ -10,7 +10,7 @@ const { performWebSearch } = require('./search/searchService.cjs');
 const { scrapeTopResults } = require('./search/scraper.cjs');
 const { MemoryManager } = require('./memory/memoryManager.cjs');
 const { DeepResearchWorker } = require('./research/deepResearch.cjs');
-const { selectTopMatches, contributionByExpert, fuseHybrid } = require('./retrieval.cjs');
+const { selectTopMatches, contributionByExpert, fuseHybrid, suggestExperts } = require('./retrieval.cjs');
 const { classifyQuery, planRetrievalQueries, unionMatches } = require('./queryPlanner.cjs');
 
 function stampFilename(prefix) {
@@ -518,6 +518,27 @@ function registerIpcHandlers({ userDataPath }) {
       }
     }
 
+    // Auto-suggest Experts that are NOT currently consulted but hold clearly relevant
+    // knowledge — the "cohesive brain" association the user shouldn't have to
+    // remember to make. Cheap: one embedding, reused, over the un-consulted vaults.
+    let suggestedExperts = [];
+    try {
+      const allHubs = repository.listSpecialistHubs() || [];
+      const notConsulted = allHubs.filter((h) => !activeSpecialistIds.includes(h.id) && h.retrievableChunkCount > 0);
+      if (notConsulted.length > 0) {
+        const probe = await ollama.generateEmbedding({ model: embeddingModel, input: content });
+        if (probe && probe.length > 0) {
+          const candidateGroups = notConsulted.slice(0, 12).map((hub) => ({
+            expert: { id: hub.id, name: hub.name },
+            matches: repository.searchSpecialistVectorMemory(hub.id, probe, 3, embeddingModel) || [],
+          }));
+          suggestedExperts = suggestExperts(candidateGroups);
+        }
+      }
+    } catch (suggestErr) {
+      console.error('Expert suggestion error:', suggestErr.message);
+    }
+
     // 5. Construct Final Prompt History with Injected Context
     const rawHistory = repository.listMessages(conversation.id).map((message) => ({
       role: message.role,
@@ -573,6 +594,7 @@ function registerIpcHandlers({ userDataPath }) {
             ...assistantMessage,
             citations: citations.length > 0 ? citations : undefined,
             specialistGrounding: specialistGrounding || undefined,
+            suggestedExperts: suggestedExperts.length > 0 ? suggestedExperts : undefined,
           },
           conversation: repository.getConversationSummary(conversation.id),
         });

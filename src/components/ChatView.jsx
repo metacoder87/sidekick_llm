@@ -116,7 +116,7 @@ function SaveAsNote({ message, experts, onSaveNote }) {
   );
 }
 
-function MessageBubble({ message, experts = [], onSaveNote }) {
+function MessageBubble({ message, experts = [], onSaveNote, onAddExpert }) {
   return (
     <article className={`message ${message.role}`}>
       <div className="message__meta">
@@ -140,6 +140,22 @@ function MessageBubble({ message, experts = [], onSaveNote }) {
           <GroundingBadge grounding={message.specialistGrounding} />
           <SourceCards sources={message.specialistGrounding.sources} />
         </>
+      ) : null}
+      {message.role === 'assistant' && message.suggestedExperts && onAddExpert ? (
+        <div className="expert-suggestions">
+          💡 Also relevant:
+          {message.suggestedExperts.map((expert) => (
+            <button
+              key={expert.id}
+              type="button"
+              className="ghost-button"
+              onClick={() => onAddExpert(expert.id)}
+              title={`Add ${expert.name} to the consulting panel and ask again`}
+            >
+              + {expert.name}
+            </button>
+          ))}
+        </div>
       ) : null}
       {message.role === 'assistant' && message.content && message.status !== 'streaming' ? (
         <SaveAsNote message={message} experts={experts} onSaveNote={onSaveNote} />
@@ -177,6 +193,7 @@ export default function ChatView({
   activeSpecialists = [],
   onExportConversation,
   onSaveNote,
+  onAddExpert,
 }) {
   if (!conversation) {
     return (
@@ -228,6 +245,7 @@ export default function ChatView({
             message={message}
             experts={activeSpecialists}
             onSaveNote={onSaveNote}
+            onAddExpert={onAddExpert}
           />
         ))}
       </div>

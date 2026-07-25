@@ -87,4 +87,25 @@ function contributionByExpert(selected) {
   return counts;
 }
 
-module.exports = { selectTopMatches, contributionByExpert, fuseHybrid };
+// Which NOT-currently-consulted Experts hold knowledge relevant to this question?
+// Surfaces the "cohesive brain" association the user can't be expected to remember:
+// they asked a nutrition question while consulting only the Training Expert, and the
+// Nutrition Expert has a strong match. Deliberately strict — a weak suggestion is
+// noise, so only clearly-relevant vaults are proposed.
+const SUGGESTION_MIN_SCORE = 0.6;
+
+function suggestExperts(candidateGroups, { minScore = SUGGESTION_MIN_SCORE, limit = 3 } = {}) {
+  return (candidateGroups || [])
+    .map(({ expert, matches }) => {
+      const best = (matches || []).reduce(
+        (max, m) => (typeof m.score === 'number' && m.score > max ? m.score : max),
+        0,
+      );
+      return { id: expert.id, name: expert.name, score: best };
+    })
+    .filter((s) => s.score >= minScore)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+}
+
+module.exports = { selectTopMatches, contributionByExpert, fuseHybrid, suggestExperts };
