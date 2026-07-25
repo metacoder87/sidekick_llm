@@ -5,6 +5,69 @@ const { extractMainText } = require('../electron/search/scraper.cjs');
 const { rankMemoriesByRelevance } = require('../electron/memory/memoryManager.cjs');
 const { selectTopMatches, contributionByExpert, fuseHybrid } = require('../electron/retrieval.cjs');
 
+const { classifyQuery, planRetrievalQueries, unionMatches } = require('../electron/queryPlanner.cjs');
+
+test('classifyQuery picks the retrieval strategy a question actually needs', () => {
+  assert.equal(classifyQuery('What is the liability cap?').type, 'simple');
+  assert.equal(classifyQuery('What does this Expert say about indemnity overall?').type, 'aggregate');
+  assert.equal(classifyQuery('Summarize the key takeaways').type, 'aggregate');
+  assert.equal(classifyQuery('How does my lab result relate to the medication prescribed?').type, 'multihop');
+  assert.equal(classifyQuery('Is there anything here that contradicts what my doctor said?').type, 'contradiction');
+  // Flags are independent of the dominant type.
+  assert.equal(classifyQuery('Is that correct?').contradiction, true);
+
+  // Inflected forms must match — a trailing \b on the stem would silently miss
+  // these and drop the strategy.
+  assert.equal(classifyQuery('Does this contradicts the guidance?').contradiction, true);
+  assert.equal(classifyQuery('Any conflicting advice here?').contradiction, true);
+  assert.equal(classifyQuery('How do these relates to each other?').multihop, true);
+  assert.equal(classifyQuery('Summarizing the findings please').aggregate, true);
+});
+
+test('planRetrievalQueries adds opposing probes for contradiction questions', async () => {
+  const query = 'Is there anything that conflicts with the recommended dose?';
+  const queries = await planRetrievalQueries({ query, classification: classifyQuery(query) });
+
+  assert.equal(queries[0], query, 'the original question is always retrieved for');
+  assert.ok(queries.length > 1, 'contradiction questions retrieve opposing framings too');
+  assert.ok(queries.some((q) => /evidence against/i.test(q)));
+  assert.ok(queries.some((q) => /limitations|contraindications/i.test(q)));
+});
+
+test('planRetrievalQueries decomposes multi-hop questions via the background model', async () => {
+  const query = 'Does my vitamin D level relate to the statin I was prescribed?';
+  const ollama = {
+    generateChatSync: async () => '["What do the sources say about vitamin D levels?", "What do the sources say about statin interactions?"]',
+  };
+  const queries = await planRetrievalQueries({
+    query,
+    classification: classifyQuery(query),
+    ollama,
+    model: 'llama3:8b',
+  });
+
+  assert.equal(queries[0], query);
+  assert.ok(queries.some((q) => /vitamin D/i.test(q)));
+  assert.ok(queries.some((q) => /statin/i.test(q)));
+});
+
+test('planRetrievalQueries degrades to the original query when the model fails', async () => {
+  const query = 'How do A and B relate together?';
+  const ollama = { generateChatSync: async () => { throw new Error('model offline'); } };
+  const queries = await planRetrievalQueries({ query, classification: classifyQuery(query), ollama, model: 'x' });
+  assert.deepEqual(queries, [query]);
+});
+
+test('unionMatches merges per-query results keeping each chunk at its best score', () => {
+  const merged = unionMatches([
+    [{ chunkId: 'a', score: 0.5 }, { chunkId: 'b', score: 0.9 }],
+    [{ chunkId: 'a', score: 0.8 }, { chunkId: 'c', score: 0.4 }],
+  ]);
+  assert.equal(merged.length, 3);
+  assert.equal(merged[0].chunkId, 'b');
+  assert.equal(merged.find((m) => m.chunkId === 'a').score, 0.8, 'keeps the best score seen for a chunk');
+});
+
 test('fuseHybrid (RRF) rewards chunks ranked well in BOTH vector and keyword lists', () => {
   // `both` is 2nd in each list; `vecOnly` is 1st in vector but absent from keyword.
   // RRF should promote `both`, because agreement across independent rankings is

@@ -406,6 +406,88 @@ class DeepResearchWorker {
     return { success: true, totalChunks, totalFailed };
   }
 
+  // Map-reduce survey of an Expert's whole vault, for aggregation questions
+  // ("what does this Expert say about X overall?"). Top-k retrieval returns the most
+  // similar passages, which is not the same as a representative survey — so we walk a
+  // broad sample of the corpus, summarize it in batches (map), then synthesize those
+  // partials (reduce). Runs on the background model since it is utility work.
+  async aggregateVault({ hubId, hubName, topic, model, onProgress = () => {} }) {
+    const { total, chunks } = this.repository.sampleHubChunks(hubId, 60);
+    if (total === 0) {
+      return { success: false, reason: 'This Expert has no indexed knowledge yet.', total: 0 };
+    }
+
+    const BATCH = 10;
+    const batches = [];
+    for (let i = 0; i < chunks.length; i += BATCH) {
+      batches.push(chunks.slice(i, i + BATCH));
+    }
+
+    onProgress({
+      status: 'aggregating',
+      message: `Surveying ${chunks.length} of ${total} chunks across the vault…`,
+      total: batches.length,
+      current: 0,
+    });
+
+    // MAP: condense each batch to the points relevant to the topic.
+    const partials = [];
+    for (let i = 0; i < batches.length; i++) {
+      const corpus = batches[i]
+        .map((c) => `[${c.sourceTitle}${c.location ? ` · ${c.location}` : ''}]: ${c.chunkText}`)
+        .join('\n\n');
+      try {
+        const partial = await this.ollama.generateChatSync({
+          model,
+          messages: [
+            {
+              role: 'system',
+              content:
+                'Extract only the points from the excerpts that are relevant to the user topic. Keep source labels in brackets. Be terse and factual; do not speculate or add outside knowledge. If nothing is relevant, reply exactly: NONE.',
+            },
+            { role: 'user', content: `Topic: ${topic}\n\nExcerpts:\n${corpus}` },
+          ],
+        });
+        if (partial && !/^\s*NONE\s*$/i.test(partial)) {
+          partials.push(partial.trim());
+        }
+      } catch (_e) {
+        // A failed batch shouldn't sink the survey.
+      }
+      onProgress({ status: 'aggregating', message: `Surveyed batch ${i + 1}/${batches.length}…`, total: batches.length, current: i + 1 });
+    }
+
+    if (partials.length === 0) {
+      return {
+        success: false,
+        reason: `Surveyed ${chunks.length} chunks but found nothing relevant to "${topic}" in ${hubName}'s vault.`,
+        total,
+        sampled: chunks.length,
+      };
+    }
+
+    // REDUCE: synthesize the partials into one grounded overview.
+    let summary = partials.join('\n\n');
+    try {
+      summary = await this.ollama.generateChatSync({
+        model,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Synthesize these partial summaries into one coherent overview. Preserve the bracketed source labels for every claim. Note explicitly where sources disagree. Do not add information beyond the summaries.',
+          },
+          { role: 'user', content: `Topic: ${topic}\n\nPartial summaries:\n${partials.join('\n\n')}` },
+        ],
+      });
+    } catch (_e) {
+      // Keep the concatenated partials if the reduce step fails.
+    }
+
+    onProgress({ status: 'complete', message: `Survey complete (${chunks.length} of ${total} chunks).` });
+    return { success: true, summary: (summary || '').trim(), total, sampled: chunks.length, batches: batches.length };
+  }
+
   // Embed (or re-embed) a note into its Expert's vault so the user's own insight is
   // retrievable alongside ingested documents. Idempotent: existing chunks for the
   // note are replaced, so editing a note updates what the model can retrieve

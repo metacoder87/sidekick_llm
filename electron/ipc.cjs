@@ -11,6 +11,7 @@ const { scrapeTopResults } = require('./search/scraper.cjs');
 const { MemoryManager } = require('./memory/memoryManager.cjs');
 const { DeepResearchWorker } = require('./research/deepResearch.cjs');
 const { selectTopMatches, contributionByExpert, fuseHybrid } = require('./retrieval.cjs');
+const { classifyQuery, planRetrievalQueries, unionMatches } = require('./queryPlanner.cjs');
 
 function stampFilename(prefix) {
   const value = new Date().toISOString().replace(/[:.]/g, '-');
@@ -390,14 +391,27 @@ function registerIpcHandlers({ userDataPath }) {
 
     let specialistContext = '';
     let specialistGrounding = null;
+    let aggregateSurvey = null;
     if (activeSpecialistIds.length > 0) {
       try {
-        const queryEmbedding = await ollama.generateEmbedding({ model: embeddingModel, input: content });
+        // Choose a retrieval strategy for THIS question rather than always doing
+        // top-k similarity (see electron/queryPlanner.cjs).
+        const classification = classifyQuery(content);
+        const retrievalQueries = await planRetrievalQueries({
+          query: content,
+          classification,
+          ollama,
+          model: backgroundModel,
+        });
 
-        // Gather candidate matches from every consulted vault (deeper per-vault so
-        // the global reranker has enough to choose from), then keep the single best
-        // few across all vaults — the strongest knowledge wins regardless of which
-        // expert produced it.
+        // Embed every planned query once (the original plus any sub-questions or
+        // contradiction probes).
+        const embeddings = [];
+        for (const q of retrievalQueries) {
+          const emb = await ollama.generateEmbedding({ model: embeddingModel, input: q });
+          if (emb && emb.length > 0) embeddings.push({ query: q, embedding: emb });
+        }
+
         const hubs = [];
         const groups = [];
         for (const specialistId of activeSpecialistIds) {
@@ -405,15 +419,31 @@ function registerIpcHandlers({ userDataPath }) {
           if (!hub) continue;
           hubs.push(hub);
 
-          // Hybrid retrieval: vector similarity (paraphrase) fused with BM25
-          // (exact terms) via RRF, then globally reranked across vaults below.
-          const vectorMatches =
-            queryEmbedding && queryEmbedding.length > 0
-              ? repository.searchSpecialistVectorMemory(hub.id, queryEmbedding, 8, embeddingModel) || []
-              : [];
-          const keywordMatches = repository.searchSpecialistKeyword(hub.id, content, 8) || [];
-          const matches = fuseHybrid(vectorMatches, keywordMatches, 8);
-          groups.push({ expert: { id: hub.id, name: hub.name }, matches });
+          // Hybrid retrieval per planned query: vector similarity (paraphrase) fused
+          // with BM25 (exact terms) via RRF; results across queries are unioned at
+          // best score, then globally reranked across vaults below.
+          const perQuery = [];
+          for (const { query, embedding } of embeddings) {
+            const vectorMatches = repository.searchSpecialistVectorMemory(hub.id, embedding, 8, embeddingModel) || [];
+            const keywordMatches = repository.searchSpecialistKeyword(hub.id, query, 8) || [];
+            perQuery.push(fuseHybrid(vectorMatches, keywordMatches, 8));
+          }
+          groups.push({ expert: { id: hub.id, name: hub.name }, matches: unionMatches(perQuery).slice(0, 8) });
+        }
+
+        // Aggregation questions need a survey of the whole vault, not top-k. Run it
+        // for the first consulted Expert and hand the model a grounded overview.
+        if (classification.aggregate && hubs.length > 0) {
+          const primary = hubs[0];
+          const survey = await researchWorker.aggregateVault({
+            hubId: primary.id,
+            hubName: primary.name,
+            topic: content,
+            model: backgroundModel,
+          });
+          if (survey.success) {
+            aggregateSurvey = { expertName: primary.name, ...survey };
+          }
         }
 
         if (hubs.length > 0) {
@@ -440,12 +470,29 @@ function registerIpcHandlers({ userDataPath }) {
                   .map((h) => h.name)
                   .join(', ')}. Integrate their expertise; when experts would disagree, present the perspectives rather than flattening them.`;
 
-          specialistContext = `\n<specialist_panel>\n${panelIntro}\nWhen you use an expert's vault knowledge, cite the expert and source. Do not fabricate sources.\n\n${roleBlocks.join('\n')}\n${knowledgeSection}\n</specialist_panel>\n`;
+          // A whole-vault survey (aggregation questions) is grounded evidence too —
+          // it is derived from the corpus, so label it as such.
+          const surveySection = aggregateSurvey
+            ? `\nVault survey of ${aggregateSurvey.expertName} (${aggregateSurvey.sampled} of ${aggregateSurvey.total} chunks, synthesized from the corpus):\n${aggregateSurvey.summary}\n`
+            : '';
+
+          // For "does anything here contradict X?" questions, the retrieval above
+          // deliberately included opposing framings. Tell the model to weigh them
+          // rather than defaulting to agreement (Stance §1 — no narrative-spin).
+          const contradictionDirective = classification.contradiction
+            ? '\nThis question asks about conflicts or correctness. Actively look for disagreement in the retrieved knowledge. State plainly what the sources support, what they contradict, and where the record is silent — do not smooth over a conflict to make the answer agreeable.'
+            : '';
+
+          specialistContext = `\n<specialist_panel>\n${panelIntro}\nWhen you use an expert's vault knowledge, cite the expert and source. Do not fabricate sources.${contradictionDirective}\n\n${roleBlocks.join('\n')}\n${knowledgeSection}\n${surveySection}</specialist_panel>\n`;
 
           specialistGrounding = {
             experts: hubs.map((h) => ({ id: h.id, name: h.name, matches: contribution.get(h.id) || 0 })),
-            grounded: topChunks.length > 0,
+            grounded: topChunks.length > 0 || Boolean(aggregateSurvey),
             matches: topChunks.length,
+            strategy: classification.type,
+            survey: aggregateSurvey
+              ? { expertName: aggregateSurvey.expertName, sampled: aggregateSurvey.sampled, total: aggregateSurvey.total }
+              : null,
             // The exact chunks that were put in front of the model, with provenance.
             // Source cards are rendered FROM THIS — never parsed out of the model's
             // prose — so a citation is always precise and verifiable (invariant #1).

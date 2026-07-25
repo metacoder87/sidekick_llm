@@ -1401,6 +1401,33 @@ class ConversationRepository {
     return this.db.prepare(`SELECT COUNT(*) AS count FROM notes WHERE hub_id = ?`).get(hubId).count;
   }
 
+  // Broad sample of a hub's chunks for aggregation ("what does this Expert say about
+  // X overall?"). Top-k similarity cannot survey a corpus — it returns the k most
+  // similar passages, not a representative spread — so aggregation walks the whole
+  // vault. Evenly strided so the sample spans the corpus rather than one document.
+  sampleHubChunks(hubId, maxChunks = 60) {
+    const total = this.db
+      .prepare(`SELECT COUNT(*) AS count FROM specialist_chunks WHERE hub_id = ?`)
+      .get(hubId).count;
+    if (total === 0) return { total: 0, chunks: [] };
+
+    const stride = Math.max(1, Math.ceil(total / maxChunks));
+    const chunks = this.db
+      .prepare(`
+        SELECT chunk_text AS chunkText, source_title AS sourceTitle, source_url AS sourceUrl,
+               location, page, source_type AS sourceType
+        FROM (
+          SELECT *, ROW_NUMBER() OVER (ORDER BY source_title, page, char_start, rowid) AS rn
+          FROM specialist_chunks WHERE hub_id = ?
+        )
+        WHERE (rn - 1) % @stride = 0
+        LIMIT @maxChunks
+      `)
+      .all(hubId, { stride, maxChunks });
+
+    return { total, chunks };
+  }
+
   // Lexical (BM25) search over a hub's chunks. Complements vector search: exact
   // terms — clause numbers, drug names, API symbols, error codes — are precisely
   // what embeddings blur and what BM25 nails. Returns the same shape as the vector
