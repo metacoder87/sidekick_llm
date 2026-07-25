@@ -244,6 +244,32 @@ test('deepResearch extracts text from a real PDF and indexes it (pdf-parse v2 AP
   }
 });
 
+test('PDF ingestion records page-level citation provenance', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sk-pdf-'));
+  try {
+    const pdfPath = path.join(dir, 'provenance.pdf');
+    fs.writeFileSync(pdfPath, buildPdf('Clause 7.2 limits liability to fees paid in the prior twelve months.'));
+
+    const saved = [];
+    const repository = { saveSpecialistChunk: (c) => saved.push(c) };
+    const ollama = { generateEmbedding: async () => new Array(768).fill(0.01) };
+    const worker = new DeepResearchWorker({ repository, ollama });
+
+    const result = await worker.ingestFilePath({ hubId: 'h1', filePath: pdfPath, model: 'nomic-embed-text' });
+    assert.equal(result.success, true);
+
+    // Every chunk must know which page it came from, so a citation can point there.
+    assert.ok(saved.length >= 1);
+    assert.equal(saved[0].page, 1);
+    assert.equal(saved[0].location, 'p. 1');
+    assert.equal(saved[0].sourceType, 'pdf');
+    assert.equal(typeof saved[0].charStart, 'number');
+    assert.ok(saved[0].chunkText.includes('Clause 7.2'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('deepResearch reports a scanned/empty PDF as failure, never silent 0-chunk success', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sk-pdf-'));
   try {

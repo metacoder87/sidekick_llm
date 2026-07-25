@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { formatTimestamp } from '../lib/format';
 import CitationsList from './CitationsList';
+import SourceCards from './SourceCards';
 
 function FormattedContent({ text }) {
   if (!text) return null;
@@ -91,7 +92,10 @@ function MessageBubble({ message }) {
         <CitationsList citations={message.citations} />
       ) : null}
       {message.role === 'assistant' && message.specialistGrounding ? (
-        <GroundingBadge grounding={message.specialistGrounding} />
+        <>
+          <GroundingBadge grounding={message.specialistGrounding} />
+          <SourceCards sources={message.specialistGrounding.sources} />
+        </>
       ) : null}
     </article>
   );

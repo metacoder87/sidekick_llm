@@ -19,6 +19,13 @@ function selectTopMatches(groups, limit = 6) {
         expertName: expert.name,
         sourceTitle: match.sourceTitle,
         chunkText: match.chunkText,
+        // Citation provenance travels with the chunk so source cards stay precise.
+        sourceUrl: match.sourceUrl || '',
+        location: match.location ?? null,
+        page: match.page ?? null,
+        charStart: match.charStart ?? null,
+        charEnd: match.charEnd ?? null,
+        sourceType: match.sourceType ?? null,
         score: typeof match.score === 'number' ? match.score : 0,
       });
     }

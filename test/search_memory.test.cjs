@@ -5,6 +5,51 @@ const { extractMainText } = require('../electron/search/scraper.cjs');
 const { rankMemoriesByRelevance } = require('../electron/memory/memoryManager.cjs');
 const { selectTopMatches, contributionByExpert } = require('../electron/retrieval.cjs');
 
+test('buildTextFragment produces a start,end fragment for long quotes and a plain one for short', async () => {
+  const { buildTextFragment, buildSourceLink } = await import('../src/lib/citations.js');
+
+  // Short quote → matched verbatim.
+  assert.equal(buildTextFragment('liability is limited'), '#:~:text=liability%20is%20limited');
+
+  // Long quote → start,end range form (more reliable than one huge match).
+  const long = 'Clause seven point two limits the total aggregate liability of the vendor to the fees actually paid during the prior twelve month period';
+  const frag = buildTextFragment(long);
+  assert.ok(frag.startsWith('#:~:text='));
+  assert.ok(frag.includes(','), 'long quotes should use the textStart,textEnd form');
+
+  // Web source → URL + fragment, flagged precise.
+  const web = buildSourceLink({ sourceUrl: 'https://example.com/doc', quote: long, location: 'chars 0–120' });
+  assert.ok(web.href.startsWith('https://example.com/doc#:~:text='));
+  assert.equal(web.precise, true);
+
+  // Local PDF → page anchor.
+  const pdf = buildSourceLink({ sourceUrl: 'file:///C:/docs/contract.pdf', quote: 'x', page: 12, location: 'p. 12' });
+  assert.equal(pdf.href, 'file:///C:/docs/contract.pdf#page=12');
+  assert.equal(pdf.precise, true);
+  assert.equal(pdf.label, 'p. 12');
+
+  // No URL → nothing linkable, but the location still shows.
+  const none = buildSourceLink({ sourceUrl: '', quote: 'x', location: 'p. 3' });
+  assert.equal(none.href, null);
+  assert.equal(none.label, 'p. 3');
+});
+
+test('selectTopMatches carries citation provenance through to the selected set', () => {
+  const groups = [
+    {
+      expert: { id: 'a', name: 'Legal Expert' },
+      matches: [
+        { sourceTitle: 'contract.pdf', sourceUrl: 'file:///c/contract.pdf', chunkText: 'Clause 7.2 …', score: 0.9, location: 'p. 12', page: 12, sourceType: 'pdf' },
+      ],
+    },
+  ];
+  const [top] = selectTopMatches(groups, 3);
+  assert.equal(top.page, 12);
+  assert.equal(top.location, 'p. 12');
+  assert.equal(top.sourceUrl, 'file:///c/contract.pdf');
+  assert.equal(top.sourceType, 'pdf');
+});
+
 test('selectTopMatches globally ranks chunks across vaults, so the best win regardless of expert', () => {
   const groups = [
     {

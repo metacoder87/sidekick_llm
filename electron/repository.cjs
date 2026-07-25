@@ -7,7 +7,7 @@ const { randomUUID } = require('node:crypto');
 // MIGRATIONS whenever the schema changes. The corpus is the project's asset
 // (see ROADMAP.md §3) — every migration runs behind a backup and an integrity
 // check so a bad upgrade can never destroy user data.
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const MAX_BACKUPS = 5;
 
 const DEFAULT_TITLE = 'New conversation';
@@ -236,6 +236,20 @@ class ConversationRepository {
           this.addColumnIfMissing('message_embeddings', 'embedding_dim', 'INTEGER');
         },
       },
+      {
+        // Citation provenance: where exactly a chunk came from, so a grounded claim
+        // can be traced to a page / character range and deep-linked (ROADMAP Stage 2
+        // — precise verifiable citations, invariants #1/#2). Legacy chunks keep NULLs
+        // and simply render without a precise location.
+        version: 3,
+        up: () => {
+          this.addColumnIfMissing('specialist_chunks', 'location', 'TEXT');
+          this.addColumnIfMissing('specialist_chunks', 'page', 'INTEGER');
+          this.addColumnIfMissing('specialist_chunks', 'char_start', 'INTEGER');
+          this.addColumnIfMissing('specialist_chunks', 'char_end', 'INTEGER');
+          this.addColumnIfMissing('specialist_chunks', 'source_type', 'TEXT');
+        },
+      },
     ];
 
     // Guard against drift: the migration list must reach the declared version.
@@ -338,6 +352,11 @@ class ConversationRepository {
         embedding_json TEXT NOT NULL,
         embedding_model TEXT,
         embedding_dim INTEGER,
+        location TEXT,
+        page INTEGER,
+        char_start INTEGER,
+        char_end INTEGER,
+        source_type TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (hub_id) REFERENCES specialist_hubs(id) ON DELETE CASCADE
       );
@@ -858,6 +877,11 @@ class ConversationRepository {
           embedding_json AS embeddingJson,
           embedding_model AS embeddingModel,
           embedding_dim AS embeddingDim,
+          location,
+          page,
+          char_start AS charStart,
+          char_end AS charEnd,
+          source_type AS sourceType,
           created_at AS createdAt
         FROM specialist_chunks
         WHERE hub_id = ?
@@ -896,8 +920,10 @@ class ConversationRepository {
     `);
     const insertChunk = this.db.prepare(`
       INSERT OR IGNORE INTO specialist_chunks
-        (id, hub_id, source_title, source_url, chunk_text, embedding_json, embedding_model, embedding_dim, created_at)
-      VALUES (@id, @hubId, @sourceTitle, @sourceUrl, @chunkText, @embeddingJson, @embeddingModel, @embeddingDim, @createdAt)
+        (id, hub_id, source_title, source_url, chunk_text, embedding_json, embedding_model, embedding_dim,
+         location, page, char_start, char_end, source_type, created_at)
+      VALUES (@id, @hubId, @sourceTitle, @sourceUrl, @chunkText, @embeddingJson, @embeddingModel, @embeddingDim,
+         @location, @page, @charStart, @charEnd, @sourceType, @createdAt)
     `);
     const insertProfile = this.db.prepare(`
       INSERT INTO user_profile (key, value) VALUES (?, ?)
@@ -963,6 +989,11 @@ class ConversationRepository {
             embeddingJson: chunk.embeddingJson,
             embeddingModel: chunk.embeddingModel ?? null,
             embeddingDim: chunk.embeddingDim ?? null,
+            location: chunk.location ?? null,
+            page: chunk.page ?? null,
+            charStart: chunk.charStart ?? null,
+            charEnd: chunk.charEnd ?? null,
+            sourceType: chunk.sourceType ?? null,
             createdAt: chunk.createdAt,
           });
           counts.specialistChunks += cres.changes;
@@ -1128,7 +1159,20 @@ class ConversationRepository {
     return result.changes > 0;
   }
 
-  saveSpecialistChunk({ hubId, sourceTitle, sourceUrl = '', chunkText, embedding, embeddingModel = null }) {
+  saveSpecialistChunk({
+    hubId,
+    sourceTitle,
+    sourceUrl = '',
+    chunkText,
+    embedding,
+    embeddingModel = null,
+    // Citation provenance (optional; legacy/unknown sources pass none).
+    location = null,
+    page = null,
+    charStart = null,
+    charEnd = null,
+    sourceType = null,
+  }) {
     assertValidEmbedding(embedding);
     const timestamp = now();
     const id = randomUUID();
@@ -1137,10 +1181,14 @@ class ConversationRepository {
     this.db
       .prepare(`
         INSERT INTO specialist_chunks
-          (id, hub_id, source_title, source_url, chunk_text, embedding_json, embedding_model, embedding_dim, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, hub_id, source_title, source_url, chunk_text, embedding_json, embedding_model, embedding_dim,
+           location, page, char_start, char_end, source_type, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
-      .run(id, hubId, sourceTitle, sourceUrl, chunkText, embeddingJson, embeddingModel, embedding.length, timestamp);
+      .run(
+        id, hubId, sourceTitle, sourceUrl, chunkText, embeddingJson, embeddingModel, embedding.length,
+        location, page, charStart, charEnd, sourceType, timestamp,
+      );
 
     // Update hub timestamp
     this.db
@@ -1186,17 +1234,19 @@ class ConversationRepository {
     // lives in a different vector space and its similarity would be meaningless
     // even at the same dimension (invariant #4).
     const dim = queryEmbedding.length;
+    const columns = `id, hub_id, source_title, source_url, chunk_text, embedding_json,
+                     location, page, char_start, char_end, source_type`;
     const rows = embeddingModel
       ? this.db
           .prepare(`
-            SELECT hub_id, source_title, source_url, chunk_text, embedding_json
+            SELECT ${columns}
             FROM specialist_chunks
             WHERE hub_id = ? AND embedding_dim = ? AND embedding_model = ?
           `)
           .all(hubId, dim, embeddingModel)
       : this.db
           .prepare(`
-            SELECT hub_id, source_title, source_url, chunk_text, embedding_json
+            SELECT ${columns}
             FROM specialist_chunks
             WHERE hub_id = ? AND embedding_dim = ?
           `)
@@ -1208,10 +1258,18 @@ class ConversationRepository {
           const vec = JSON.parse(row.embedding_json);
           const score = cosineSimilarity(queryEmbedding, vec);
           return {
+            chunkId: row.id,
             hubId: row.hub_id,
             sourceTitle: row.source_title,
             sourceUrl: row.source_url,
             chunkText: row.chunk_text,
+            // Citation provenance — carried through so source cards can be rendered
+            // from the retrieved chunk itself rather than parsed out of model text.
+            location: row.location,
+            page: row.page,
+            charStart: row.char_start,
+            charEnd: row.char_end,
+            sourceType: row.source_type,
             score,
           };
         } catch (_e) {

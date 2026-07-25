@@ -1,7 +1,60 @@
 const path = require('node:path');
-const { app, BrowserWindow, dialog } = require('electron');
+const { app, BrowserWindow, dialog, shell } = require('electron');
 
 let mainWindow = null;
+
+// Citation cards and scraped-source links are attacker-influenceable content. By
+// default Electron opens `target="_blank"` in a new BrowserWindow that INHERITS
+// webPreferences — including the preload script — so a clicked link would hold
+// `window.sidekick` and could read settings (API keys), conversations, and the whole
+// corpus. Every external navigation therefore goes to the OS browser instead, and
+// in-app navigation away from our own origin is denied outright.
+function hardenNavigation(contents) {
+  const isExternal = (rawUrl) => {
+    try {
+      const protocol = new URL(rawUrl).protocol;
+      return protocol === 'https:' || protocol === 'http:';
+    } catch (_error) {
+      return false;
+    }
+  };
+
+  contents.setWindowOpenHandler(({ url }) => {
+    if (isExternal(url)) {
+      shell.openExternal(url).catch((error) => {
+        console.error('Failed to open external URL:', error.message);
+      });
+    }
+    return { action: 'deny' };
+  });
+
+  contents.on('will-navigate', (event, url) => {
+    const current = contents.getURL();
+    if (url === current) {
+      return;
+    }
+    // Allow the dev server / local app origin to navigate (HMR, reloads); send
+    // anything else to the OS browser.
+    const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+    const sameOrigin =
+      (devServerUrl && url.startsWith(devServerUrl)) || url.startsWith('file://');
+    if (sameOrigin) {
+      return;
+    }
+
+    event.preventDefault();
+    if (isExternal(url)) {
+      shell.openExternal(url).catch((error) => {
+        console.error('Failed to open external URL:', error.message);
+      });
+    }
+  });
+
+  // Never allow a renderer to attach a preload-bearing webview.
+  contents.on('will-attach-webview', (event) => {
+    event.preventDefault();
+  });
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -18,6 +71,8 @@ function createWindow() {
       sandbox: false,
     },
   });
+
+  hardenNavigation(mainWindow.webContents);
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   const previewMode = process.env.PREVIEW === 'true';

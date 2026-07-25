@@ -405,6 +405,20 @@ function registerIpcHandlers({ userDataPath }) {
             experts: hubs.map((h) => ({ id: h.id, name: h.name, matches: contribution.get(h.id) || 0 })),
             grounded: topChunks.length > 0,
             matches: topChunks.length,
+            // The exact chunks that were put in front of the model, with provenance.
+            // Source cards are rendered FROM THIS — never parsed out of the model's
+            // prose — so a citation is always precise and verifiable (invariant #1).
+            sources: topChunks.map((c, index) => ({
+              id: index + 1,
+              expertName: c.expertName,
+              sourceTitle: c.sourceTitle,
+              sourceUrl: c.sourceUrl || '',
+              quote: c.chunkText,
+              location: c.location || null,
+              page: c.page ?? null,
+              sourceType: c.sourceType || null,
+              score: Number(c.score.toFixed(4)),
+            })),
           };
         }
       } catch (specErr) {
