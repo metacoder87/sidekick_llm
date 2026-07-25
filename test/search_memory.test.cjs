@@ -195,6 +195,33 @@ test('rankMemoriesByRelevance surfaces query-relevant facts over merely-recent o
   assert.equal(top[0].fact, 'User prefers React with Vite for frontend work');
 });
 
+test('findSupersessionCandidates proposes same-topic facts, not identical or unrelated ones', () => {
+  const { findSupersessionCandidates } = require('../electron/memory/memoryManager.cjs');
+  const memories = [
+    { id: '1', fact: 'User runs Windows 11 as their operating system' },
+    { id: '2', fact: 'User enjoys hiking on weekends' },
+    { id: '3', fact: 'User switched to Linux as their operating system' },
+  ];
+
+  const candidates = findSupersessionCandidates('User switched to Linux as their operating system', memories);
+  const ids = candidates.map((c) => c.id);
+
+  assert.ok(ids.includes('1'), 'the same-topic older fact is a candidate');
+  assert.ok(!ids.includes('3'), 'an identical fact is not a supersession candidate');
+  assert.ok(!ids.includes('2'), 'unrelated facts are not candidates');
+});
+
+test('rankMemoriesByRelevance favours reinforced facts and decays stale unreinforced ones', () => {
+  const old = new Date(Date.now() - 400 * 86400000).toISOString(); // >180 days
+  const memories = [
+    { fact: 'User deploys with Docker', category: 'stack', updatedAt: old, reinforcedCount: 1 },
+    { fact: 'User deploys with Docker Swarm', category: 'stack', updatedAt: old, reinforcedCount: 5 },
+  ];
+  // Equal lexical relevance → the repeatedly-stated fact wins the tiebreak.
+  const ranked = rankMemoriesByRelevance(memories, 'deploys', 2);
+  assert.equal(ranked[0].reinforcedCount, 5);
+});
+
 test('rankMemoriesByRelevance falls back to recency when the query has no overlap', () => {
   const memories = [
     { fact: 'Older fact', category: 'general', updatedAt: '2026-07-01T00:00:00Z' },

@@ -30,6 +30,7 @@
   "memory": {
     "list": "memory:list",
     "add": "memory:add",
+    "update": "memory:update",
     "delete": "memory:delete"
   },
   "profile": {

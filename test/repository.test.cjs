@@ -145,6 +145,45 @@ test('repository de-duplicates near-identical memories instead of accumulating t
   repository.close();
 });
 
+test('repository reinforces a repeated fact and supersedes an outdated one', () => {
+  const repository = new ConversationRepository(':memory:');
+
+  // Repetition reinforces rather than duplicating.
+  const os1 = repository.addUserMemory({ fact: 'I use Windows 11', category: 'os' });
+  repository.addUserMemory({ fact: 'i use windows 11', category: 'os' });
+  const stored = repository.listUserMemories();
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].reinforcedCount, 2);
+
+  // A newer fact retires the old one: history is kept, but retrieval only sees
+  // what is currently true.
+  const os2 = repository.addUserMemory({ fact: 'I switched to Linux', category: 'os' });
+  assert.equal(repository.supersedeUserMemory(os1.id, os2.id), true);
+
+  const active = repository.listUserMemories();
+  assert.equal(active.length, 1);
+  assert.equal(active[0].fact, 'I switched to Linux');
+
+  const all = repository.listUserMemories({ includeSuperseded: true });
+  assert.equal(all.length, 2, 'superseded facts are retained for history');
+  assert.equal(all.find((m) => m.id === os1.id).supersededBy, os2.id);
+
+  // Superseding twice is a no-op.
+  assert.equal(repository.supersedeUserMemory(os1.id, os2.id), false);
+
+  repository.close();
+});
+
+test('repository supports editing a stored memory', () => {
+  const repository = new ConversationRepository(':memory:');
+  const mem = repository.addUserMemory({ fact: 'I prefer Vue', category: 'stack' });
+  const updated = repository.updateUserMemory({ id: mem.id, fact: 'I prefer React' });
+  assert.equal(updated.fact, 'I prefer React');
+  assert.equal(updated.category, 'stack', 'omitted fields are preserved');
+  assert.equal(repository.listUserMemories()[0].fact, 'I prefer React');
+  repository.close();
+});
+
 test('repository excludes dimension-mismatched vectors from retrieval (model-switch safety)', () => {
   const repository = new ConversationRepository(':memory:');
   const hub = repository.createSpecialistHub({ name: 'Dim Test' });

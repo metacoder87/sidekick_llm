@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('sidekick', {
   memory: {
     list: () => ipcRenderer.invoke(channels.memory.list),
     add: (payload) => ipcRenderer.invoke(channels.memory.add, payload),
+    update: (payload) => ipcRenderer.invoke(channels.memory.update, payload),
     delete: (id) => ipcRenderer.invoke(channels.memory.delete, id),
   },
   profile: {

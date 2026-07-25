@@ -7,7 +7,7 @@ const { randomUUID } = require('node:crypto');
 // MIGRATIONS whenever the schema changes. The corpus is the project's asset
 // (see ROADMAP.md §3) — every migration runs behind a backup and an integrity
 // check so a bad upgrade can never destroy user data.
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 const MAX_BACKUPS = 5;
 
 const DEFAULT_TITLE = 'New conversation';
@@ -296,6 +296,27 @@ class ConversationRepository {
           `);
         },
       },
+      {
+        // Memory supersession: when a newer fact replaces an older one ("I use
+        // Windows" → "I switched to Linux"), the old fact is retired rather than
+        // deleted, so the corpus keeps its history while retrieval only sees what is
+        // currently true. `reinforced_count` records how often a fact recurs, which
+        // ranking uses to keep well-established facts ahead of one-off mentions.
+        version: 6,
+        up: () => {
+          this.addColumnIfMissing('user_memories', 'superseded_by', 'TEXT');
+          this.addColumnIfMissing('user_memories', 'superseded_at', 'TEXT');
+          this.addColumnIfMissing('user_memories', 'reinforced_count', 'INTEGER');
+          // Migrations run BEFORE initialize(), so on a fresh database the table
+          // does not exist yet — backfill only when there is something to backfill.
+          const hasTable = this.db
+            .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_memories'`)
+            .get();
+          if (hasTable) {
+            this.db.exec(`UPDATE user_memories SET reinforced_count = 1 WHERE reinforced_count IS NULL`);
+          }
+        },
+      },
     ];
 
     // Guard against drift: the migration list must reach the declared version.
@@ -353,6 +374,9 @@ class ConversationRepository {
         fact TEXT NOT NULL,
         category TEXT DEFAULT 'general',
         source_conversation_id TEXT,
+        superseded_by TEXT,
+        superseded_at TEXT,
+        reinforced_count INTEGER DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -624,8 +648,14 @@ class ConversationRepository {
 
     if (existing) {
       const nextCategory = category && category.trim() ? category.trim() : existing.category;
+      // Repeating a fact reinforces it rather than duplicating it — recurrence is
+      // evidence of importance, which ranking uses to favour established facts.
       this.db
-        .prepare(`UPDATE user_memories SET updated_at = ?, category = ? WHERE id = ?`)
+        .prepare(`
+          UPDATE user_memories
+          SET updated_at = ?, category = ?, reinforced_count = COALESCE(reinforced_count, 1) + 1
+          WHERE id = ?
+        `)
         .run(timestamp, nextCategory, existing.id);
       return {
         id: existing.id,
@@ -657,7 +687,10 @@ class ConversationRepository {
     return memory;
   }
 
-  listUserMemories() {
+  // Active memories only — superseded facts are retained for history but must never
+  // reach the model, or the assistant would act on knowledge the user has replaced.
+  listUserMemories({ includeSuperseded = false } = {}) {
+    const where = includeSuperseded ? '' : 'WHERE superseded_by IS NULL';
     return this.db
       .prepare(`
         SELECT
@@ -665,12 +698,46 @@ class ConversationRepository {
           fact,
           category,
           source_conversation_id AS sourceConversationId,
+          superseded_by AS supersededBy,
+          superseded_at AS supersededAt,
+          COALESCE(reinforced_count, 1) AS reinforcedCount,
           created_at AS createdAt,
           updated_at AS updatedAt
         FROM user_memories
+        ${where}
         ORDER BY updated_at DESC
       `)
       .all();
+  }
+
+  updateUserMemory({ id, fact, category }) {
+    const timestamp = now();
+    this.db
+      .prepare(`
+        UPDATE user_memories
+        SET fact = COALESCE(@fact, fact),
+            category = COALESCE(@category, category),
+            updated_at = @timestamp
+        WHERE id = @id
+      `)
+      .run({ id, fact: fact ?? null, category: category ?? null, timestamp });
+    return this.db
+      .prepare(`
+        SELECT id, fact, category, source_conversation_id AS sourceConversationId,
+               superseded_by AS supersededBy, COALESCE(reinforced_count, 1) AS reinforcedCount,
+               created_at AS createdAt, updated_at AS updatedAt
+        FROM user_memories WHERE id = ?
+      `)
+      .get(id);
+  }
+
+  // Retire `oldId` in favour of `newId`. The old fact stays on record (auditable)
+  // but is excluded from retrieval.
+  supersedeUserMemory(oldId, newId) {
+    const result = this.db
+      .prepare(`UPDATE user_memories SET superseded_by = ?, superseded_at = ? WHERE id = ? AND superseded_by IS NULL`)
+      .run(newId, now(), oldId);
+    return result.changes > 0;
   }
 
   deleteUserMemory(id) {

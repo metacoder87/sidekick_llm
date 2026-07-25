@@ -231,6 +231,10 @@ function registerIpcHandlers({ userDataPath }) {
     return repository.addUserMemory(payload);
   });
 
+  ipcMain.handle(channels.memory.update, async (_event, payload) => {
+    return repository.updateUserMemory(payload);
+  });
+
   ipcMain.handle(channels.memory.delete, async (_event, id) => {
     const success = repository.deleteUserMemory(id);
     return { success };

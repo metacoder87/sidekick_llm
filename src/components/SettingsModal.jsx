@@ -26,6 +26,8 @@ export default function SettingsModal({
   const [newFact, setNewFact] = useState('');
   const [memoryCategory, setMemoryCategory] = useState('user-defined');
   const [memorySearch, setMemorySearch] = useState('');
+  const [editingMemoryId, setEditingMemoryId] = useState(null);
+  const [editingMemoryText, setEditingMemoryText] = useState('');
 
   // Web Search Settings state
   const [searchProvider, setSearchProvider] = useState('duckduckgo');
@@ -126,6 +128,13 @@ export default function SettingsModal({
       category: memoryCategory,
     });
     setNewFact('');
+    await loadMemories();
+  }
+
+  async function handleSaveMemoryEdit() {
+    if (!sidekick || !editingMemoryId || !editingMemoryText.trim()) return;
+    await sidekick.memory.update({ id: editingMemoryId, fact: editingMemoryText.trim() });
+    setEditingMemoryId(null);
     await loadMemories();
   }
 
@@ -274,9 +283,49 @@ export default function SettingsModal({
                   filteredMemories.map((mem) => (
                     <div key={mem.id} className="memory-card">
                       <div className="memory-card__content">
-                        <strong>{mem.fact}</strong>
+                        {editingMemoryId === mem.id ? (
+                          <input
+                            type="text"
+                            className="memory-edit-input"
+                            value={editingMemoryText}
+                            autoFocus
+                            onChange={(e) => setEditingMemoryText(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleSaveMemoryEdit();
+                              if (e.key === 'Escape') setEditingMemoryId(null);
+                            }}
+                          />
+                        ) : (
+                          <strong>{mem.fact}</strong>
+                        )}
                         <span className="memory-category-tag">{mem.category}</span>
+                        {mem.reinforcedCount > 1 ? (
+                          <span className="memory-category-tag" title="How often you've stated this">
+                            ×{mem.reinforcedCount}
+                          </span>
+                        ) : null}
                       </div>
+                      {editingMemoryId === mem.id ? (
+                        <>
+                          <button type="button" className="ghost-button" onClick={handleSaveMemoryEdit}>
+                            Save
+                          </button>
+                          <button type="button" className="ghost-button" onClick={() => setEditingMemoryId(null)}>
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          onClick={() => {
+                            setEditingMemoryId(mem.id);
+                            setEditingMemoryText(mem.fact);
+                          }}
+                        >
+                          Edit
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="ghost-button danger"
