@@ -13,28 +13,70 @@ const PASS_TOKEN = 'NO_FURTHER_COMMENT';
 // rule is what prevents rounds of "I agree with the previous expert" padding — the
 // dominant quality risk in multi-agent deliberation.
 function expertTurnInstruction({ round, totalRounds, isFinalRound, hasTranscript }) {
-  if (round === 1 && !hasTranscript) {
+  // Round 1 is INDEPENDENT: an Expert must not see the others' opening answers.
+  // Showing them anchors every later speaker on the first one, and by round 2 the
+  // whole panel is restating a single view — observed with 5 Experts x 4 rounds.
+  if (round === 1) {
     return [
-      'You are one member of a panel answering the user directly.',
-      'Answer in your own voice from your own expertise and vault knowledge.',
-      'Cite the sources you were given. Do not speak for the other experts.',
+      'You are one member of a panel. You have NOT yet heard the other experts.',
+      'Answer the user directly and independently, from your own expertise and vault knowledge.',
+      'Do not speculate about what the others will say, and do not hedge toward a consensus.',
+      'Cite the sources you were given.',
     ].join(' ');
   }
 
+  const antiRestate = [
+    'Do NOT restate, summarise or re-endorse points already made — the user has already read them, and repetition wastes their time.',
+    'Agreement alone is not a contribution.',
+    `If you have nothing to add beyond what has already been said, reply with exactly ${PASS_TOKEN} and nothing else. Passing is a respected, useful answer.`,
+  ].join(' ');
+
   if (isFinalRound) {
     return [
-      'This is the final round. State your closing position concisely.',
-      'Note explicitly where you agree or disagree with the other experts and why.',
-      `If you have nothing to add beyond what you already said, reply exactly ${PASS_TOKEN}.`,
+      'This is the final round. Give only your CLOSING POSITION, in at most three sentences.',
+      'If you disagree with another expert, name them and state the substantive reason.',
+      'If your view changed during the discussion, say what changed it.',
+      antiRestate,
     ].join(' ');
   }
 
   return [
-    `This is round ${round} of ${totalRounds}. You have read the other experts' contributions.`,
-    'Respond to them directly — build on, refine, or dispute their points, and say so plainly.',
-    'You may change your position if their evidence warrants it.',
-    `Only speak if you genuinely add, dispute, or refine something. Otherwise reply exactly ${PASS_TOKEN}.`,
+    `This is round ${round} of ${totalRounds}. You have now read the other experts.`,
+    'Add only what is NEW: a point nobody raised, a correction, a caveat they missed, evidence that cuts against them, or a specific disagreement.',
+    'Challenge weak reasoning directly, by name. Independent thinking is what the user is paying for.',
+    'You may change your position if their evidence warrants it — say so explicitly if you do.',
+    antiRestate,
   ].join(' ');
+}
+
+// Token-set overlap on content words. Used to catch a turn that merely restates
+// what has already been said, which instructions alone do not reliably prevent on
+// smaller local models.
+function textSimilarity(a, b) {
+  const tokens = (text) =>
+    new Set(
+      (text || '')
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((t) => t.length > 3),
+    );
+
+  const left = tokens(a);
+  const right = tokens(b);
+  if (left.size === 0 || right.size === 0) return 0;
+
+  let shared = 0;
+  for (const token of left) if (right.has(token)) shared += 1;
+  return shared / new Set([...left, ...right]).size;
+}
+
+// Is this turn effectively a repeat of something already said?
+//
+// Deliberately NOT applied in round 1: two experts independently reaching the same
+// conclusion is real information (consensus), and suppressing it would hide a
+// genuine signal. From round 2 onward, restating is noise.
+function isRedundant(text, priorTurns, threshold = 0.5) {
+  return (priorTurns || []).some((turn) => textSimilarity(text, turn.content) >= threshold);
 }
 
 function isPass(text) {
@@ -121,7 +163,9 @@ class RoundtableOrchestrator {
           conversationId,
         });
 
-        const transcript = formatTranscript(turns);
+        // Round 1 speakers get NO transcript — see expertTurnInstruction. This is
+        // what keeps five Experts from collapsing onto the first one's answer.
+        const transcript = round === 1 ? '' : formatTranscript(turns);
         const others = hubs.filter((h) => h.id !== hub.id).map((h) => h.name);
         const turnPrompt = [
           // State identity explicitly. Without it, an Expert reading a transcript
@@ -161,10 +205,17 @@ class RoundtableOrchestrator {
           continue;
         }
 
-        if (isPass(text)) {
+        // An explicit pass, or a turn that merely restates what has already been
+        // said, both become a visible pass. The redundancy check is the enforcement
+        // behind the "do not restate" instruction, which smaller models ignore.
+        const redundant = round > 1 && isRedundant(text, turns);
+        if (isPass(text) || redundant) {
           onTurnComplete({
             turnId, round, expertId: hub.id, expertName: hub.name, kind: 'expert',
-            content: `${hub.name} had nothing further to add.`, passed: true, grounding: null,
+            content: redundant
+              ? `${hub.name} had nothing to add beyond what was already said.`
+              : `${hub.name} had nothing further to add.`,
+            passed: true, grounding: null,
           });
           continue;
         }
@@ -247,5 +298,7 @@ module.exports = {
   expertTurnInstruction,
   formatTranscript,
   isPass,
+  isRedundant,
+  textSimilarity,
   PASS_TOKEN,
 };
