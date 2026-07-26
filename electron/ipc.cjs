@@ -4,6 +4,7 @@ const { randomUUID } = require('node:crypto');
 const { dialog, ipcMain } = require('electron');
 
 const channels = require('../shared/channels.json');
+const expertCatalog = require('../shared/expertCatalog.json');
 const { ConversationRepository } = require('./repository.cjs');
 const { OllamaService } = require('./ollama.cjs');
 const { MemoryManager } = require('./memory/memoryManager.cjs');
@@ -130,6 +131,78 @@ function registerIpcHandlers({ userDataPath }) {
   ipcMain.handle(channels.notes.delete, async (_event, id) => {
     const success = repository.deleteNote(id);
     return { success };
+  });
+
+  // Expert Library: curated recipe packs. A template ships a persona plus a seed
+  // research brief; installing creates the Expert instantly and (optionally) runs
+  // that research on THIS machine, so no third-party content is redistributed
+  // (ROADMAP Stage 7 — licensing).
+  ipcMain.handle(channels.specialist.catalog, async () => {
+    const installed = repository.listSpecialistHubs().map((hub) => hub.name.toLowerCase());
+    return {
+      ...expertCatalog,
+      templates: expertCatalog.templates.map((template) => ({
+        ...template,
+        alreadyInstalled: installed.includes(template.name.toLowerCase()),
+      })),
+    };
+  });
+
+  ipcMain.handle(channels.specialist.installFromCatalog, async (event, { templateId, runResearch = true }) => {
+    const template = expertCatalog.templates.find((t) => t.id === templateId);
+    if (!template) {
+      throw new Error('Unknown Expert template.');
+    }
+
+    // The persona is available immediately — research fills the vault afterwards, so
+    // the Expert is usable (ungrounded, and labelled as such) from the first second.
+    const hub = repository.createSpecialistHub({
+      name: template.name,
+      description: template.description,
+      systemPrompt: template.systemPrompt,
+      icon: template.icon || 'brain',
+    });
+
+    if (!runResearch) {
+      return { installed: true, hub, researched: false };
+    }
+
+    const embeddingModel = repository.getSetting('embeddingModel');
+    const preflight = await ollama.checkEmbedding(embeddingModel);
+    if (!preflight.ok) {
+      return { installed: true, hub, researched: false, reason: preflight.reason };
+    }
+
+    let model = repository.getSetting('activeModel');
+    if (!model) {
+      const models = await ollama.listModels();
+      model = models[0]?.name || '';
+    }
+
+    const allSettings = repository.getAllSettings();
+    const research = await researchWorker.runWebDeepResearch({
+      hubId: hub.id,
+      topic: template.seedResearch,
+      model: repository.getSetting('backgroundModel') || model,
+      embeddingModel,
+      searchOptions: {
+        provider: allSettings.searchProvider || 'duckduckgo',
+        searxngUrl: allSettings.searxngUrl,
+        tavilyApiKey: allSettings.tavilyApiKey,
+        braveApiKey: allSettings.braveApiKey,
+      },
+      onProgress: (progress) => {
+        event.sender.send(channels.events.researchProgress, { hubId: hub.id, ...progress });
+      },
+    });
+
+    return {
+      installed: true,
+      hub: repository.getSpecialistHub(hub.id),
+      researched: research.success,
+      chunksIndexed: research.totalChunks || 0,
+      reason: research.reason,
+    };
   });
 
   // Expert Packs: share, back up, or install a single Expert.

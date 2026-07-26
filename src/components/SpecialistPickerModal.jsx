@@ -161,11 +161,22 @@ export default function SpecialistPickerModal({
           </button>
           <button
             type="button"
+            className="primary-button"
+            onClick={() => {
+              onClose();
+              onOpenLibrary();
+            }}
+            title="Browse curated Experts and add them in one click"
+          >
+            📚 Browse Expert Library
+          </button>
+          <button
+            type="button"
             className="secondary-button"
             onClick={handleImportPack}
             title="Install an Expert shared as a pack file"
           >
-            📦 Install Expert Pack
+            📦 Install from file
           </button>
           <button type="button" className="primary-button" onClick={onClose}>
             Done{activeSpecialistIds.length > 0 ? ` (${activeSpecialistIds.length} consulting)` : ''}

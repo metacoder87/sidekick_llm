@@ -46,7 +46,9 @@
     "delete": "specialist:delete",
     "reindex": "specialist:reindex",
     "exportPack": "specialist:exportPack",
-    "importPack": "specialist:importPack"
+    "importPack": "specialist:importPack",
+    "catalog": "specialist:catalog",
+    "installFromCatalog": "specialist:installFromCatalog"
   },
   "research": {
     "start": "research:start",

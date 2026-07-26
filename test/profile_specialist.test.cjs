@@ -138,6 +138,37 @@ test('notes are embedded into the vault, re-indexed on edit, and removed on dele
   repository.close();
 });
 
+test('the Expert Library catalog is complete and its seed briefs decompose into real queries', async () => {
+  const catalog = require('../shared/expertCatalog.json');
+  const worker = new DeepResearchWorker({ repository: {}, ollama: {} });
+
+  assert.ok(catalog.templates.length >= 20, 'the library should cover the major domains');
+
+  const ids = new Set();
+  for (const template of catalog.templates) {
+    assert.ok(template.id && !ids.has(template.id), `duplicate or missing id: ${template.id}`);
+    ids.add(template.id);
+    for (const field of ['name', 'category', 'description', 'systemPrompt', 'seedResearch', 'icon']) {
+      assert.ok(template[field], `${template.id} is missing ${field}`);
+    }
+
+    // Seed briefs must decompose WITHOUT an LLM (they carry quoted queries), or a
+    // fresh install would depend on the chat model being reachable.
+    const queries = await worker.deriveSearchQueries(template.seedResearch, null);
+    assert.ok(queries.length >= 3, `${template.id} produced too few seed queries`);
+    assert.ok(
+      queries.every((q) => q.length > 0 && q.length < 120),
+      `${template.id} produced an unusable seed query`,
+    );
+  }
+
+  // The high-stakes domains must be represented, since they are the point.
+  const categories = new Set(catalog.templates.map((t) => t.category));
+  for (const expected of ['Coding', 'Business', 'Law', 'Medicine', 'Finance', 'Research', 'Writing']) {
+    assert.ok(categories.has(expected), `catalog is missing the ${expected} category`);
+  }
+});
+
 test('an Expert Pack round-trips persona, vault and notes into a NEW installable Expert', () => {
   const repository = new ConversationRepository(':memory:');
   const model = repository.getSetting('embeddingModel');

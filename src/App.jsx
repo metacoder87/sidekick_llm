@@ -7,6 +7,7 @@ import SettingsModal from './components/SettingsModal';
 import Sidebar from './components/Sidebar';
 import SpecialistModal from './components/SpecialistModal';
 import SpecialistPickerModal from './components/SpecialistPickerModal';
+import ExpertLibraryModal from './components/ExpertLibraryModal';
 import ThemeToggle from './components/ThemeToggle';
 
 function moveConversationToFront(items, conversation) {
@@ -52,6 +53,7 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSpecialistPickerOpen, setIsSpecialistPickerOpen] = useState(false);
   const [isSpecialistModalOpen, setIsSpecialistModalOpen] = useState(false);
+  const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [specialistToEdit, setSpecialistToEdit] = useState(null);
 
   // Active Specialist Hubs — a panel of experts consulted for each message.
@@ -822,6 +824,17 @@ export default function App() {
           setSpecialistToEdit(hub);
           setIsSpecialistModalOpen(true);
         }}
+        onOpenLibrary={() => setIsLibraryOpen(true)}
+      />
+
+      <ExpertLibraryModal
+        isOpen={isLibraryOpen}
+        onClose={() => setIsLibraryOpen(false)}
+        sidekick={sidekick}
+        // A freshly installed Expert joins the consulting panel immediately.
+        onInstalled={(hub) =>
+          applySpecialistSelection([...new Set([...activeSpecialistIds, hub.id])])
+        }
       />
 
       <SpecialistModal

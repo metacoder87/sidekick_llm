@@ -57,6 +57,8 @@ contextBridge.exposeInMainWorld('sidekick', {
     reindex: (hubId) => ipcRenderer.invoke(channels.specialist.reindex, { hubId }),
     exportPack: (hubId) => ipcRenderer.invoke(channels.specialist.exportPack, hubId),
     importPack: () => ipcRenderer.invoke(channels.specialist.importPack),
+    catalog: () => ipcRenderer.invoke(channels.specialist.catalog),
+    installFromCatalog: (payload) => ipcRenderer.invoke(channels.specialist.installFromCatalog, payload),
   },
   research: {
     start: (payload) => ipcRenderer.invoke(channels.research.start, payload),
