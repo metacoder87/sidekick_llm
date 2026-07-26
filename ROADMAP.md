@@ -5,7 +5,7 @@
 > session, a collaborator, or the author six months from now — without the
 > conversation that produced it. If you change direction, change this file.
 
-Last updated: 2026-07-26
+Last updated: 2026-07-26 (Stage 1, 2, 2.5 complete; Expert Library shipped)
 
 ---
 
@@ -1072,3 +1072,11 @@ Engineering isn't the only gate to revenue. These are commonly missed:
 - **Verify claims at runtime.** The §2 bugs were *reproduced*, not guessed. Hold new
   claims to the same bar before acting on them.
 - **Update this file when direction changes.** A stale roadmap is worse than none.
+- **A green build is not a working UI.** Wiring bugs (a handler prop that is never
+  declared, a dead click target) fail neither the build nor the tests nor a boot
+  check. When a feature is user-triggered, CLICK IT — drive the app or the dev
+  server — before reporting it done. This has now cost two user-visible defects
+  (the blank production window, the dead Expert Library button).
+- **Never patch source with a regex you have not verified matched.** Both defects
+  above came from a scripted replace that silently did nothing. Assert on the
+  result or use an explicit edit.
