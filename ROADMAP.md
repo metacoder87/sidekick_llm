@@ -5,7 +5,7 @@
 > session, a collaborator, or the author six months from now — without the
 > conversation that produced it. If you change direction, change this file.
 
-Last updated: 2026-07-23
+Last updated: 2026-07-26
 
 ---
 
@@ -305,6 +305,26 @@ Not all of Stage 5 is required to ship. The v1 bar is:
 - **Can defer past v1:** sqlite-vec (until users hit ~10k+ chunks), full
   accessibility (do incrementally), multi-platform (start on one OS), starter-Expert
   marketplace.
+
+## 4c. Market viability ladder (what is sellable, when)
+
+Development milestones mapped to what the product can actually be *used for* at that
+point. The engineering stages are the work; these are the outcomes. **Nothing before
+M3 may be sold**, because encryption, packaging, licensing and legal all gate revenue.
+
+| Milestone | Requires | Viability | Can you… |
+|---|---|---|---|
+| **M0 — Personal prototype** ✅ *(reached 2026-07-24)* | Stages 1–2 | Not distributable | Use it daily yourself. Corpus is safe, Experts work, citations are precise. Unencrypted, unpackaged, unsigned. |
+| **M1 — Demoable** | + Stage 2.5 Roundtable v1, §5a drop-a-doc, single-Expert packs | Showable, not sellable | Present at University; pitch research contracts; record a demo. The differentiators are visible and real. |
+| **M2 — Design-partner alpha** | + Stage 3, **Stage 4 (encryption, app-lock, audit)** | Private hand-outs only | Give it to a handful of trusted users. Sensitive data is protected, actions are auditable. Still no installer or licence. |
+| **M3 — Commercial v1** 💰 | + Stage 5 minimum bar: packaging, code signing, auto-update, licence activation, EULA + disclaimers, onboarding, crash reporting, CI | **First revenue** | Sell to individuals. A stranger installs, activates, and is productive in 5 minutes. |
+| **M4 — Scaled v1.x** | + sqlite-vec, multi-platform, accessibility, Stage 7 recipe packs & Teams | Growth | Support large corpora (10k+ chunks), sell Expert/Team packs, reach Mac/Linux users. |
+| **M5 — v2 platform** | + Stage 8 Workflow Experts, licensed content packs | New category | Sell orchestrated deliverable production (business plans, literature reviews). Highest ceiling, highest cost. |
+| **E1 — Enterprise** *(parallel)* | Stage 6 (RBAC, multi-user, server/sync, Docker) | Separate product | Sell to firms/clinics — only after Individual validates demand (open Q#4). |
+
+**Recommended build order:** Stage 2.5 v1 → §5a quick wins (drop-a-doc, Expert Packs)
+→ **M1 demo** → Stage 3 → Stage 4 → Stage 5 → **M3 ship & earn** → Stage 7 → Stage 8.
+The trap to avoid is building M5 features while M3 never ships.
 
 ## 5. The stages
 
