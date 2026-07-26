@@ -848,32 +848,56 @@ Rather than blocking the team at every gate, the user works *alongside* it:
       finishes the current unit, writes a clean closing state, and stops) — the same
       controls as the Roundtable, scaled to a long run.
 
-#### Problems this design introduces that must be solved up front
-1. **Concurrent edit conflicts — the biggest trap.** If an agent rewrites a section
-   while the user is typing in it, someone's work is silently lost. Required:
-   **section-level ownership** (agents replace only the block they own), writes via
-   staged file + atomic rename, and a content-hash check so an agent never overwrites
-   a block the user touched since it was read. Do NOT hand-roll general merge logic.
-2. **Distinguishing a note from content.** A user typing a paragraph of prose means
-   "keep this"; a user typing "make ch. 3 tenser" means "instruction". Needs an
-   explicit convention — margin/`> [!NOTE]` blocks (or a separate notes pane) for
-   instructions, with plain edits treated as canon the team must preserve.
-3. **Run state ≠ artifact.** Surviving documents are not a resumable run. The
-   orchestrator must separately persist *which stage, whose turn, what is pending*,
-   or after a crash the user has files but the team cannot pick up where it stopped.
-4. **Filesystem safety.** Workflows create folders and files from model-influenced
-   names. Confine every write to a sandboxed workspace root and sanitize paths — a
-   model-supplied `../../` must be impossible (ties to Stage 4 hardening).
-5. **Hard gates still required at stage boundaries.** Ambient editing does not remove
-   the need to approve the *plan* and the *outline*: a bad plan can otherwise
-   generate 50k words before anyone notices. Async interjection covers within-stage
-   drift; explicit approval covers structural error.
-6. **Citations must survive into the artifact.** For business plans, literature
-   reviews and legal memos, every factual claim keeps its source — this is what makes
-   a local, grounded version better than cloud multi-agent tools.
-7. **Editor scope.** Building a rich text editor is its own project. Start with
-   **Markdown files + a simple in-app editor + a file watcher**, so the user may also
-   edit in VS Code/Obsidian/Word and the manager still sees the changes.
+#### Resolved design (2026-07-24) — how each problem is handled
+
+**Workspace.** The user picks an existing **empty folder** via a native dialog; the
+app does not invent locations. That folder is the sandbox root. *Still required:*
+sanitize model-supplied file names **inside** it — a generated name of `../../x`
+must be impossible even though the root was user-chosen.
+
+**Resume — two files, two jobs.**
+- `progress.md` — a running narrative the manager maintains: what is done, what is
+  in flight, decisions taken. Human-readable, and used to **re-ground** the manager
+  and to build each Expert's re-entry prompt.
+- `run-state.json` — the machine truth: stage index, whose turn, pending items,
+  per-section status, content hashes. **Prose alone is not a resume mechanism** — a
+  model re-reading a narrative can misinterpret it; structured state cannot. Keep
+  both; the JSON decides control flow, the prose supplies context.
+- ⚠️ **Terminology/feasibility:** the manager is **not re-trained** on the plan or
+  document (no fine-tuning — that is expensive, slow, and not what Ollama does here).
+  It is **re-grounded**: plan, outline, `progress.md`, and the relevant document
+  sections are retrieved into its context each turn — exactly the RAG the app
+  already does. Same practical effect, no training cost.
+
+**Document safety — rolling draft + published version.** The team works on a rolling
+draft; the user sees the published document. Before publishing, the manager diffs the
+published doc against what it last wrote, incorporates any user changes, then writes.
+*Still required:* a **content-hash guard** at write time — if the published doc
+changed between read and write, re-diff instead of overwriting. Without it there is
+still a lost-update window (manager reads T1, user edits T2, manager writes T3).
+Writes go staged-file → atomic rename.
+
+**Note vs. content — resolved by asking.** Unambiguous cases need no ceremony:
+prose edits are treated as canon and preserved; clear instructions are acted on. When
+an edit is genuinely ambiguous, **the manager asks in the team chat to confirm intent
+before revising**. *Still required:* a non-blocking fallback — if the user is away,
+the manager parks that section, continues elsewhere, and records the open question in
+`progress.md`, rather than stalling the run.
+
+**Milestones instead of fixed gates.** The plan proposes milestones where the team
+pauses for review; the user accepts, moves, or removes them — giving the team as much
+slack as their track record has earned. **Plan and outline approval remain mandatory**
+(structural error is what ambient editing cannot catch).
+
+**Citations — always tracked, optionally displayed.** Provenance is retained for every
+generated claim regardless of workflow type; *presentation* is configurable: inline
+for business plans and research, or collected into a final sources section that can be
+omitted from a creative-writing export. Never discard the data, only its display.
+
+**Editor — deferred.** No rich text editor in v1. The app shows the document
+read-only and **watches the file**, so the user edits in whatever they already use
+(VS Code, Obsidian, Word) and the manager still sees the changes. An in-app editor is
+a later refinement.
 - [ ] **Grounding carried through** — every factual claim in the artifact keeps its
       citation, so a literature review or legal memo is verifiable, not plausible.
       This is the one thing that makes a local, private version of this genuinely
