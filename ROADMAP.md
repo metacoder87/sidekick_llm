@@ -789,6 +789,15 @@ strongest answer to cold-start.*
       3. **Licensed content** — only with an actual agreement from the publisher.
       Every pack carries a manifest: sources, licences, build date, and the embedding
       model used. **Get this reviewed before selling packs.**
+- [ ] **DECIDED (2026-07-24): packs ship as self-assembling recipes.** A pack contains
+      personas, team composition, and a built-in **first-round research plan**; on
+      download the user's own machine runs that research and builds the vaults
+      locally. Nothing copyrighted is redistributed, and each install produces a
+      vault whose provenance is the user's own fetch. Ship progress UI for the
+      assembly run (it is a Deep Research run, so it already reports honestly).
+      **Phase 2 — licensed preloaded content:** once counsel has verified what may be
+      bundled per domain, packs may ship prebuilt vault content. Treated as a
+      separate, legally-gated expansion, not a v1 requirement.
 - [ ] **Curation quality bar** — a bad prebuilt medical team is a liability, not just
       a poor product. Packs need provenance, a visible build date, trust tiers, and a
       clear "not professional advice" framing (invariant #9).
@@ -817,6 +826,54 @@ machinery, but goal-directed, long-running, and artifact-producing.
 - [ ] **Human checkpoints** — approve/redirect between stages. Fully autonomous
       long-run generation compounds small errors into confident, well-formatted
       nonsense; a review gate at each stage is what makes the output trustworthy.
+
+#### Collaborative workspace (decided 2026-07-24) — ambient human-in-the-loop
+Rather than blocking the team at every gate, the user works *alongside* it:
+
+- [ ] **Workflow folder on disk** — each run creates a folder containing `plan.md`
+      (the manager's plan, written first from the activating prompt) and the
+      deliverable documents. Human-readable, portable, and survives a crash: if the
+      run aborts, the plan and artifacts remain, can be edited, and can be referenced
+      from ordinary chats with other Experts while the user decides what to do next.
+- [ ] **Live document view** — the user opens the working document at any time,
+      reads, edits prose, and leaves notes for the team **without pausing the run**.
+- [ ] **Edits are read as instructions** — before each stage/turn the manager diffs
+      the document against the last agent-written version, reads what the user
+      changed or added, and routes it to the relevant team members ("the reader wants
+      more tension in ch. 3"). The team keeps working; the user is never blocking.
+- [ ] **Team thread beside the document** — Experts talk to each other and report
+      progress in a conversation thread, so the user can watch the reasoning, not
+      just the output.
+- [ ] **Abort** (stop now, keep everything produced) and **"Wrap it up"** (manager
+      finishes the current unit, writes a clean closing state, and stops) — the same
+      controls as the Roundtable, scaled to a long run.
+
+#### Problems this design introduces that must be solved up front
+1. **Concurrent edit conflicts — the biggest trap.** If an agent rewrites a section
+   while the user is typing in it, someone's work is silently lost. Required:
+   **section-level ownership** (agents replace only the block they own), writes via
+   staged file + atomic rename, and a content-hash check so an agent never overwrites
+   a block the user touched since it was read. Do NOT hand-roll general merge logic.
+2. **Distinguishing a note from content.** A user typing a paragraph of prose means
+   "keep this"; a user typing "make ch. 3 tenser" means "instruction". Needs an
+   explicit convention — margin/`> [!NOTE]` blocks (or a separate notes pane) for
+   instructions, with plain edits treated as canon the team must preserve.
+3. **Run state ≠ artifact.** Surviving documents are not a resumable run. The
+   orchestrator must separately persist *which stage, whose turn, what is pending*,
+   or after a crash the user has files but the team cannot pick up where it stopped.
+4. **Filesystem safety.** Workflows create folders and files from model-influenced
+   names. Confine every write to a sandboxed workspace root and sanitize paths — a
+   model-supplied `../../` must be impossible (ties to Stage 4 hardening).
+5. **Hard gates still required at stage boundaries.** Ambient editing does not remove
+   the need to approve the *plan* and the *outline*: a bad plan can otherwise
+   generate 50k words before anyone notices. Async interjection covers within-stage
+   drift; explicit approval covers structural error.
+6. **Citations must survive into the artifact.** For business plans, literature
+   reviews and legal memos, every factual claim keeps its source — this is what makes
+   a local, grounded version better than cloud multi-agent tools.
+7. **Editor scope.** Building a rich text editor is its own project. Start with
+   **Markdown files + a simple in-app editor + a file watcher**, so the user may also
+   edit in VS Code/Obsidian/Word and the manager still sees the changes.
 - [ ] **Grounding carried through** — every factual claim in the artifact keeps its
       citation, so a literature review or legal memo is verifiable, not plausible.
       This is the one thing that makes a local, private version of this genuinely
