@@ -1169,3 +1169,71 @@ button {
   opacity: 0.8;
   padding: 4px 0;
 }
+
+/* ---- Header overflow ------------------------------------------------------- */
+/* A large consulting panel used to push the banner contents off the window. */
+.workspace__banner {
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.workspace__banner-info {
+  flex: 1 1 220px;
+  overflow: hidden;
+}
+
+.workspace__banner-right {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Long Expert names truncate rather than stretching the row. */
+.specialist-pill-header,
+.model-pill-header {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+
+/* The notice can be long; keep it from monopolising the banner. */
+.notice-badge {
+  max-width: 42vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Call-to-action button ------------------------------------------------- */
+/* Outlined accent, deliberately NOT the filled accent used for a selected /
+   consulting Expert — a filled accent button read as "currently active". */
+.cta-button {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.cta-button:hover {
+  background: var(--accent-soft);
+}
+
+/* Clicking a button must not leave it looking permanently selected. Keyboard
+   focus still gets a clear ring via :focus-visible. */
+button:focus:not(:focus-visible) {
+  outline: none;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

@@ -162,7 +162,7 @@ export default function SpecialistPickerModal({
           </button>
           <button
             type="button"
-            className="primary-button"
+            className="cta-button"
             onClick={() => {
               onClose();
               onOpenLibrary();

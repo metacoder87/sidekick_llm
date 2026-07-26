@@ -739,7 +739,9 @@ export default function App() {
                 Consulting:
               </span>
             ) : null}
-            {activeSpecialistHubs.map((hub) => (
+            {/* Show a few pills, then collapse — a large panel would otherwise push
+                the header off the window. The full list stays available on hover. */}
+            {activeSpecialistHubs.slice(0, 3).map((hub) => (
               <span
                 key={hub.id}
                 className="specialist-pill-header"
@@ -749,6 +751,18 @@ export default function App() {
                 ⚡ {hub.name}
               </span>
             ))}
+            {activeSpecialistHubs.length > 3 ? (
+              <span
+                className="specialist-pill-header"
+                onClick={() => setIsSpecialistPickerOpen(true)}
+                title={activeSpecialistHubs
+                  .slice(3)
+                  .map((hub) => hub.name)
+                  .join(', ')}
+              >
+                +{activeSpecialistHubs.length - 3} more
+              </span>
+            ) : null}
             <ThemeToggle theme={theme} onToggle={handleToggleTheme} />
           </div>
         </header>
