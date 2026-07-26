@@ -628,16 +628,21 @@ there are no distinct Expert turns and no interaction.
 - [x] **v2 — Deliberation:** rounds 2..N where Experts see and respond to each other,
       with the "only speak if you add something" rule and explicit passes.
       *Shipped together with v1; the transcript budget/digest is deferred to v3.*
-- [ ] **v3 — Polish:** early-stop on convergence, per-round re-retrieval, roundtable
-      transcript export, and "save the moderator synthesis as a Note".
+- [~] **v3 — Polish:** convergence handling **DONE** (independent round 1,
+      anti-restatement instructions, and programmatic redundancy → visible pass;
+      verified on the reported 5-Expert/4-round case: max pairwise similarity 0.44).
+      Still open: per-round re-retrieval, transcript export, "save the moderator
+      synthesis as a Note", and a transcript digest for high N on small models.
 
 **STATUS (2026-07-26): v1 + v2 shipped and verified live.** 2 Experts x 2 rounds +
 moderator on llama3:8b ran in ~21s with correct turn order, per-turn grounding, real
 cross-expert response, and a structured agreed/disagreed synthesis. Experts held
 distinct positions rather than converging once turn identity was stated explicitly.
 **Known limits carried forward:** transcript context is passed whole (no digest yet —
-watch on small models at high N), no per-round re-retrieval, and no automatic
-early-stop on convergence beyond the all-passed case. v3 covers these.
+watch on small models at high N) and there is no per-round re-retrieval. Convergence
+is now handled (see v3). **Field-tested 2026-07-26:** the first real 5-Expert x
+4-round run exposed round-1 anchoring, since fixed — a reminder that this feature
+needs real panels, not synthetic ones, to validate.
 
 **STAGE 2.5 EXIT:** with 3 Experts and N=3 on a real question, the user sees three
 distinct, individually-cited perspectives, at least one genuine disagreement or
