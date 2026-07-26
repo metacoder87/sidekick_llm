@@ -16,6 +16,7 @@ export default function SpecialistPickerModal({
   onSelectSpecialist,
   onOpenCreateModal,
   onOpenEditModal,
+  onOpenLibrary,
 }) {
   const isSelected = (id) => activeSpecialistIds.includes(id);
   const noneSelected = activeSpecialistIds.length === 0;
