@@ -50,7 +50,8 @@
   },
   "research": {
     "start": "research:start",
-    "ingestFile": "research:ingestFile"
+    "ingestFile": "research:ingestFile",
+    "quickIngest": "research:quickIngest"
   },
   "notes": {
     "list": "notes:list",

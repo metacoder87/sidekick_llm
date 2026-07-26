@@ -1031,3 +1031,43 @@ button {
 .message.turn-pass .message__body {
   font-size: 0.82rem;
 }
+
+/* Drop a document into the conversation */
+.workspace {
+  position: relative;
+}
+
+.workspace--dropping {
+  outline: 2px dashed var(--accent);
+  outline-offset: -8px;
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+
+.drop-overlay__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  padding: 22px 30px;
+  border-radius: 14px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  text-align: center;
+}
+
+.drop-overlay__panel span {
+  font-size: 0.8rem;
+  opacity: 0.85;
+}

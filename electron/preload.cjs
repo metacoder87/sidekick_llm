@@ -1,5 +1,5 @@
 const path = require('path');
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 const channels = require(path.join(__dirname, '..', 'shared', 'channels.json'));
 
 function subscribe(channel, listener) {
@@ -61,6 +61,19 @@ contextBridge.exposeInMainWorld('sidekick', {
   research: {
     start: (payload) => ipcRenderer.invoke(channels.research.start, payload),
     ingestFile: (payload) => ipcRenderer.invoke(channels.research.ingestFile, payload),
+    quickIngest: (payload) => ipcRenderer.invoke(channels.research.quickIngest, payload),
+  },
+  files: {
+    // Electron 32+ removed File.path; webUtils is the supported way to resolve a
+    // dropped file to a real path. The renderer never gains filesystem access —
+    // it only learns the path, and the main process does the reading.
+    getPath: (file) => {
+      try {
+        return webUtils.getPathForFile(file);
+      } catch (_error) {
+        return '';
+      }
+    },
   },
   notes: {
     list: (hubId) => ipcRenderer.invoke(channels.notes.list, hubId),

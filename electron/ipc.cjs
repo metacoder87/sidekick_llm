@@ -229,6 +229,92 @@ function registerIpcHandlers({ userDataPath }) {
     });
   });
 
+  // Drop a document straight into the conversation: ingest it immediately into a new
+  // Expert named after the file, so the user can ask about it in seconds instead of
+  // first learning what an Expert is. This is the cold-start fix (ROADMAP §5a).
+  ipcMain.handle(channels.research.quickIngest, async (event, { filePaths = [], hubId = null }) => {
+    const paths = filePaths.filter((p) => typeof p === 'string' && p.trim());
+    if (paths.length === 0) {
+      return { success: false, reason: 'No readable file was dropped.' };
+    }
+
+    const supported = ['.pdf', '.txt', '.md', '.json', '.csv'];
+    const usable = paths.filter((p) => supported.includes(path.extname(p).toLowerCase()));
+    if (usable.length === 0) {
+      return {
+        success: false,
+        reason: `Unsupported file type. Drop a PDF, TXT, MD, JSON or CSV.`,
+      };
+    }
+
+    const embeddingModel = repository.getSetting('embeddingModel');
+    const preflight = await ollama.checkEmbedding(embeddingModel);
+    if (!preflight.ok) {
+      return { success: false, reason: preflight.reason };
+    }
+
+    let model = repository.getSetting('activeModel');
+    if (!model) {
+      const models = await ollama.listModels();
+      model = models[0]?.name || '';
+    }
+
+    // Reuse the given Expert, or create one named after the first document.
+    let hub = hubId ? repository.getSpecialistHub(hubId) : null;
+    let createdHub = false;
+    if (!hub) {
+      const base = path.basename(usable[0], path.extname(usable[0])).slice(0, 60);
+      hub = repository.createSpecialistHub({
+        name: base || 'Dropped document',
+        description: `Created from ${usable.map((p) => path.basename(p)).join(', ')}`,
+        systemPrompt: 'Answer strictly from the provided documents, and cite them.',
+        icon: 'book',
+      });
+      createdHub = true;
+    }
+
+    let indexed = 0;
+    let failed = 0;
+    const failures = [];
+    for (const filePath of usable) {
+      const result = await researchWorker.ingestFilePath({
+        hubId: hub.id,
+        filePath,
+        model,
+        embeddingModel,
+        onProgress: (progress) => {
+          event.sender.send(channels.events.researchProgress, { hubId: hub.id, ...progress });
+        },
+      });
+      if (result.success) {
+        indexed += result.chunksCount || 0;
+      } else {
+        failed += 1;
+        failures.push(`${path.basename(filePath)}: ${result.reason}`);
+      }
+    }
+
+    // Nothing indexed means nothing to ask about — remove the empty Expert we just
+    // made rather than leaving a useless husk behind.
+    if (indexed === 0) {
+      if (createdHub) repository.deleteSpecialistHub(hub.id);
+      return {
+        success: false,
+        reason: failures[0] || 'The document contained no indexable text.',
+      };
+    }
+
+    return {
+      success: true,
+      hub: repository.getSpecialistHub(hub.id),
+      createdHub,
+      chunksIndexed: indexed,
+      filesFailed: failed,
+      failures,
+      skipped: paths.length - usable.length,
+    };
+  });
+
   ipcMain.handle(channels.research.ingestFile, async (event, { hubId }) => {
     const result = await dialog.showOpenDialog({
       title: 'Select PDF or Text Document for Specialist Vault',

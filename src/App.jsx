@@ -64,6 +64,10 @@ export default function App() {
   const [rounds, setRounds] = useState(1);
   const [roundtableStatus, setRoundtableStatus] = useState(null);
 
+  // Drag-and-drop document ingestion state.
+  const [isDragging, setIsDragging] = useState(false);
+  const [isIngestingDrop, setIsIngestingDrop] = useState(false);
+
   const deferredSearch = useDeferredValue(searchQuery);
   const messagesRef = useRef(null);
 
@@ -532,6 +536,42 @@ export default function App() {
     });
   }
 
+  // Drop a document anywhere on the workspace: it becomes an Expert immediately and
+  // joins the consulting panel, so the user can ask about it in seconds.
+  async function handleDropFiles(fileList) {
+    if (!sidekick || !fileList || fileList.length === 0) return;
+
+    const filePaths = Array.from(fileList)
+      .map((file) => sidekick.files.getPath(file))
+      .filter(Boolean);
+
+    if (filePaths.length === 0) {
+      setNotice('Could not read the dropped file. Try the upload button in an Expert instead.');
+      return;
+    }
+
+    setIsIngestingDrop(true);
+    setNotice(`Reading ${filePaths.length === 1 ? '1 document' : `${filePaths.length} documents`}…`);
+    try {
+      const result = await sidekick.research.quickIngest({ filePaths });
+      if (!result.success) {
+        setNotice(`Could not use that document — ${result.reason}`);
+        return;
+      }
+
+      // Consult the new Expert right away; that is the point of dropping it.
+      await applySpecialistSelection([...new Set([...activeSpecialistIds, result.hub.id])]);
+      setNotice(
+        `📄 "${result.hub.name}" is ready (${result.chunksIndexed} chunks) and now being consulted — ask away.` +
+          (result.filesFailed ? ` ${result.filesFailed} file(s) could not be read.` : ''),
+      );
+    } catch (error) {
+      setNotice(`Could not use that document — ${error.message}`);
+    } finally {
+      setIsIngestingDrop(false);
+    }
+  }
+
   async function handlePanelModeChange(nextMode) {
     setPanelMode(nextMode);
     if (sidekick) {
@@ -653,7 +693,26 @@ export default function App() {
 
       <ResizableDivider onResize={handleResizeSidebar} />
 
-      <section className="workspace">
+      <section
+        className={`workspace${isDragging ? ' workspace--dropping' : ''}`}
+        onDragOver={(event) => {
+          // Only react to actual files, not text selections being dragged around.
+          if (Array.from(event.dataTransfer.types || []).includes('Files')) {
+            event.preventDefault();
+            setIsDragging(true);
+          }
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget === event.target) setIsDragging(false);
+        }}
+        onDrop={(event) => {
+          if (Array.from(event.dataTransfer.types || []).includes('Files')) {
+            event.preventDefault();
+            setIsDragging(false);
+            handleDropFiles(event.dataTransfer.files);
+          }
+        }}
+      >
         <header className="workspace__banner">
           <div className="workspace__banner-info">
             <h2 className="header-chat-title">{activeTitle}</h2>
@@ -691,6 +750,19 @@ export default function App() {
             <ThemeToggle theme={theme} onToggle={handleToggleTheme} />
           </div>
         </header>
+
+        {isDragging ? (
+          <div className="drop-overlay">
+            <div className="drop-overlay__panel">
+              <strong>📄 Drop to ask about this document</strong>
+              <span>It becomes an Expert you can consult — PDF, TXT, MD, JSON, CSV</span>
+            </div>
+          </div>
+        ) : null}
+
+        {isIngestingDrop ? (
+          <div className="roundtable-status">📄 Indexing the document…</div>
+        ) : null}
 
         {roundtableStatus ? (
           <div className="roundtable-status">🗣️ {roundtableStatus}</div>
