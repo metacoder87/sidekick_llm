@@ -629,6 +629,24 @@ answer — without the wait feeling unreasonable.
       create one?" → the auto-grow *feeling* without the sprawl.
 - [ ] **Implement or delete `depth`.** Either bounded recursive crawl (visited-set,
       per-domain cap) or remove the param + fix the README.
+- [ ] **Self-directed Expert growth (autonomous research).** On a schedule, an Expert
+      proposes its own Deep Research prompts to fill gaps in its domain, runs them,
+      and grows — the "Experts improve while you sleep" hook.
+      - **Ground the gap detection in real signals, not model imagination:** questions
+        the user actually asked that retrieved poorly (low top score / ungrounded
+        answers), topics referenced inside the vault but thinly covered, and sources
+        that have since been updated. An Expert asked to invent its own weaknesses
+        will hallucinate them; these signals are measurable.
+      - **Findings land in the Research Inbox — staged, attributed, UNINDEXED**
+        (invariant #6). Autonomous *capture* is the feature; autonomous *trust* is
+        the corpus-poisoning bug. Promotion stays a human click.
+      - **Per-Expert autonomy setting** with a hard rule: Experts holding
+        `own-records` or medical/legal trust tiers never auto-promote. A coding
+        Expert may be allowed to, once the pipeline has earned trust.
+      - **Show the diff** — "3 new findings for Python Expert since Tuesday" with
+        what changed, so growth is legible rather than silent.
+      - **Budget guards** — cap runs per day, respect robots/rate limits, and never
+        run research while the user is waiting on a chat turn.
 
 **STAGE 3 EXIT:** a month of heavy use yields a clean, trusted, non-redundant set of
 Experts; no unvetted content ever silently entered a vault.
@@ -712,6 +730,15 @@ app lock; sensitive actions are logged; the link-handling exfil path is closed.
         did not choose. (Also lets the app suggest sizes appropriate to their RAM/VRAM.)
       - **Role defaults** — once models exist, suggest sensible chat / background /
         embedding assignments, all overridable.
+      - **Trigger points** — the recommendation screen opens automatically on first
+        run and whenever the app detects **no usable models** (or no embedding
+        model), so a fresh install is never a dead end.
+      - **Fit to this machine** — recommend by detected RAM/VRAM and disk, marking
+        options that will not run well rather than letting the user pick a 70B on a
+        laptop and conclude the app is broken.
+- [ ] **Publish minimum requirements up front** (README + site + installer): disk per
+      model tier, RAM/VRAM for each recommended model, and the fact that Ollama is a
+      prerequisite. A local-LLM app that hides its hardware cost earns refunds.
 - [ ] **Starter Experts:** curated, versioned, importable vaults for common domains.
       Solve cold-start AND are a natural **licensing/revenue unit**, defensible where
       the app shell isn't. (Enabled by Stage 1 portable export/import.)
@@ -735,7 +762,81 @@ are in place.
 
 ---
 
-### STAGE 6 — Enterprise edition  (DEFERRED — gated on business model, open Q#4)
+### STAGE 7 — Expert Teams & Marketplace  (after Individual v1 ships)
+*Goal: turn Experts from something each user builds alone into something they can
+acquire, share, and assemble into teams — the clearest revenue surface and the
+strongest answer to cold-start.*
+
+- [ ] **Teams (Expert groups).** Name and save a panel — "Legal Team", "Medical
+      Team (allergist + nutritionist + dietitian)", "Marketing Team", "Investment
+      Advisors", "Grant Writers" — and consult it in one click, in Synthesized or
+      Roundtable mode. Small step up from the existing multi-select panel.
+- [ ] **Expert Packs / Team Packs** — portable, versioned export of one Expert or a
+      whole team (personas + vaults + notes + provenance). Builds directly on the
+      Stage 1 corpus export; §5a lists the single-Expert version as an early win.
+- [ ] **Marketplace / library** — browse, download, update, and version packs.
+      Local-first: downloading a pack is importing a file, no account required.
+- [ ] **⚠️ Content licensing is the gating risk, not the engineering.** A vault holds
+      *copies of source text*. Redistributing a pack built from copyrighted journals,
+      paywalled case law, or scraped books is infringement — worse in the exact
+      high-stakes domains (medical, legal) where packs are most valuable. Viable
+      designs, in order of preference:
+      1. **Recipe packs** — ship the *persona + research plan + source URLs*, and the
+         user's own machine fetches and indexes the content locally. Distributes
+         know-how, not copies.
+      2. **Public-domain / open-licence corpora** — statutes, PubMed abstracts,
+         government publications, open-access journals, docs with permissive licences.
+      3. **Licensed content** — only with an actual agreement from the publisher.
+      Every pack carries a manifest: sources, licences, build date, and the embedding
+      model used. **Get this reviewed before selling packs.**
+- [ ] **Curation quality bar** — a bad prebuilt medical team is a liability, not just
+      a poor product. Packs need provenance, a visible build date, trust tiers, and a
+      clear "not professional advice" framing (invariant #9).
+
+**STAGE 7 EXIT:** a new user downloads a team pack and gets genuinely useful, cited
+answers within minutes of install — with every pack's sources and licences legible.
+
+---
+
+### STAGE 8 — Workflow Experts (orchestrated multi-agent work)  (LATER — largest bet)
+*Goal: a "manager" Expert that coordinates a team across many turns to produce a real
+deliverable — a novel, a business plan, a literature review, a legal memo — with the
+grounding and citation discipline the rest of the app enforces.*
+
+This is the natural extension of the Roundtable (Stage 2.5): the same turn-taking
+machinery, but goal-directed, long-running, and artifact-producing.
+
+- [ ] **Workflow definition** — a manager persona plus an ordered set of stages, each
+      naming which Experts act and what the stage must produce (e.g. Novelist:
+      ideation → outline → character development → draft-by-section → continuity pass).
+- [ ] **Durable run state** — a workflow may span hours and hundreds of generations.
+      Runs must be persisted, resumable, inspectable, and cancellable; a crash or
+      restart must not lose the work.
+- [ ] **Artifact store** — the deliverable is a first-class object, versioned per
+      stage, diffable, and exportable (it is not a chat transcript).
+- [ ] **Human checkpoints** — approve/redirect between stages. Fully autonomous
+      long-run generation compounds small errors into confident, well-formatted
+      nonsense; a review gate at each stage is what makes the output trustworthy.
+- [ ] **Grounding carried through** — every factual claim in the artifact keeps its
+      citation, so a literature review or legal memo is verifiable, not plausible.
+      This is the one thing that makes a local, private version of this genuinely
+      better than the cloud multi-agent tools.
+- [ ] **Cost realism** — a novel is *hundreds* of generations. Needs background
+      execution, progress reporting, model routing (small model for mechanical
+      stages), and honest time estimates before a run starts.
+
+**Why it is staged last:** it multiplies every open risk (latency, context budget,
+error compounding) and demands new infrastructure (durable runs, artifacts,
+checkpoints). Build it once the Roundtable has proven that multi-agent turn-taking
+produces genuinely distinct, useful contributions on local models.
+
+**STAGE 8 EXIT:** a Business Developer workflow turns a one-paragraph idea into a
+sectioned, cited business plan the user would actually show someone — with visible
+stage checkpoints and a resumable run.
+
+---
+
+### STAGE 6 — Enterprise edition  (DEFERRED — parallel track, gated on business model, open Q#4)
 *A separate, larger product built ON TOP of the Individual base. Do not start until
 Individual has shipped and validated demand.*
 
