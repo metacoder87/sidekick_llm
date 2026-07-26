@@ -116,11 +116,26 @@ function SaveAsNote({ message, experts, onSaveNote }) {
   );
 }
 
+// In a roundtable, each message is a turn by a named Expert (or the moderator), so
+// the speaker — not "Sidekick" — is what the user needs to see.
+function speakerLabel(message) {
+  if (message.role === 'user') return 'You';
+  if (message.turnKind === 'moderator') return '⚖️ Moderator';
+  if (message.expertName) {
+    const round = message.round ? ` · round ${message.round}` : '';
+    return `⚡ ${message.expertName}${round}`;
+  }
+  return 'Sidekick';
+}
+
 function MessageBubble({ message, experts = [], onSaveNote, onAddExpert }) {
+  const isPass = message.turnKind === 'pass';
   return (
-    <article className={`message ${message.role}`}>
+    <article
+      className={`message ${message.role}${message.turnKind ? ` turn-${message.turnKind}` : ''}`}
+    >
       <div className="message__meta">
-        <span>{message.role === 'user' ? 'You' : 'Sidekick'}</span>
+        <span>{speakerLabel(message)}</span>
         <span>{formatTimestamp(message.createdAt)}</span>
       </div>
       <div className="message__body">
@@ -157,7 +172,7 @@ function MessageBubble({ message, experts = [], onSaveNote, onAddExpert }) {
           ))}
         </div>
       ) : null}
-      {message.role === 'assistant' && message.content && message.status !== 'streaming' ? (
+      {message.role === 'assistant' && message.content && message.status !== 'streaming' && !isPass ? (
         <SaveAsNote message={message} experts={experts} onSaveNote={onSaveNote} />
       ) : null}
     </article>

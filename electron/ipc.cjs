@@ -9,6 +9,7 @@ const { OllamaService } = require('./ollama.cjs');
 const { MemoryManager } = require('./memory/memoryManager.cjs');
 const { DeepResearchWorker } = require('./research/deepResearch.cjs');
 const { buildChatContext } = require('./contextBuilder.cjs');
+const { RoundtableOrchestrator } = require('./roundtable.cjs');
 
 function stampFilename(prefix) {
   const value = new Date().toISOString().replace(/[:.]/g, '-');
@@ -23,6 +24,9 @@ function registerIpcHandlers({ userDataPath }) {
   const memoryManager = new MemoryManager({ repository, ollama });
   const researchWorker = new DeepResearchWorker({ repository, ollama });
   const activeGenerations = new Map();
+  // requestIds for which the user pressed "Answer now": the orchestrator checks this
+  // between turns to skip remaining rounds and go straight to the moderator.
+  const wrapUpRequests = new Set();
 
   ipcMain.handle(channels.models.list, async () => {
     return ollama.listModels();
@@ -307,6 +311,152 @@ function registerIpcHandlers({ userDataPath }) {
     const isWebSearchEnabled =
       payload.webSearchOverride ?? (allSettings.webSearchEnabled === 'true');
 
+    // ---- Roundtable mode -------------------------------------------------------
+    // When the user has chosen Roundtable and Experts are consulted, each Expert
+    // speaks in its own grounded voice and a moderator consolidates, instead of one
+    // blended answer (ROADMAP Stage 2.5).
+    const requestedIds = Array.isArray(payload.activeSpecialistIds)
+      ? payload.activeSpecialistIds.filter(Boolean)
+      : payload.activeSpecialistId
+        ? [payload.activeSpecialistId]
+        : [];
+    const panelMode = payload.panelModeOverride || allSettings.panelMode || 'synthesized';
+
+    if (panelMode === 'roundtable' && requestedIds.length > 0) {
+      const hubs = requestedIds
+        .map((id) => repository.getSpecialistHub(id))
+        .filter(Boolean)
+        .map((hub) => ({ id: hub.id, name: hub.name }));
+
+      if (hubs.length > 0) {
+        const rounds = Number(payload.roundsOverride || allSettings.roundtableRounds || 1);
+        const requestId = randomUUID();
+        const abortController = new AbortController();
+        activeGenerations.set(requestId, abortController);
+        wrapUpRequests.delete(requestId);
+
+        const orchestrator = new RoundtableOrchestrator({
+          repository,
+          ollama,
+          // Each Expert is grounded through the normal context pipeline, scoped to
+          // its own vault so its turn cites only what it actually knows.
+          buildContext: ({ hubIds, content: question, conversationId }) =>
+            buildChatContext({
+              repository,
+              ollama,
+              memoryManager,
+              researchWorker,
+              content: question,
+              conversationId,
+              payload: { activeSpecialistIds: hubIds },
+              model,
+              embeddingModel,
+              backgroundModel,
+              allSettings,
+              isWebSearchEnabled,
+            }),
+        });
+
+        const history = repository
+          .listMessages(conversation.id)
+          .map((message) => ({ role: message.role, content: message.content }));
+
+        Promise.resolve()
+          .then(async () => {
+            const result = await orchestrator.run({
+              conversationId: conversation.id,
+              content,
+              hubs,
+              rounds,
+              model,
+              // The answer the user reads uses the chat model; Expert turns may use
+              // the faster background model when one is configured.
+              moderatorModel: model,
+              expertModel: repository.getSetting('backgroundModel') || model,
+              history,
+              control: {
+                signal: abortController.signal,
+                shouldWrapUp: () => wrapUpRequests.has(requestId),
+              },
+              onTurnStart: (turn) => {
+                event.sender.send(channels.events.turnStart, { requestId, ...turn });
+              },
+              onTurnDelta: (turn) => {
+                event.sender.send(channels.events.turnDelta, { requestId, ...turn });
+              },
+              onTurnComplete: (turn) => {
+                // Persist each turn as its own attributed assistant message so the
+                // discussion reloads coherently with per-turn citations.
+                const saved = repository.addMessage({
+                  conversationId: conversation.id,
+                  role: 'assistant',
+                  content: turn.content,
+                  expertId: turn.expertId || null,
+                  expertName: turn.expertName || null,
+                  round: turn.round || null,
+                  turnKind: turn.passed ? 'pass' : 'expert',
+                });
+                event.sender.send(channels.events.turnComplete, {
+                  requestId,
+                  ...turn,
+                  message: { ...saved, specialistGrounding: turn.grounding || undefined },
+                });
+              },
+            });
+
+            if (result.moderator) {
+              const saved = repository.addMessage({
+                conversationId: conversation.id,
+                role: 'assistant',
+                content: result.moderator.content,
+                expertName: 'Moderator',
+                turnKind: 'moderator',
+              });
+              event.sender.send(channels.events.turnComplete, {
+                requestId,
+                ...result.moderator,
+                message: saved,
+              });
+            }
+
+            event.sender.send(channels.events.streamComplete, {
+              requestId,
+              conversationId: conversation.id,
+              roundtable: {
+                turns: result.turns.length,
+                aborted: result.aborted,
+                stoppedEarly: result.stoppedEarly || null,
+              },
+              conversation: repository.getConversationSummary(conversation.id),
+            });
+
+            // Background memory work, as in the normal path.
+            Promise.allSettled([
+              memoryManager.indexMessageEmbedding({
+                messageId: userMessage.id,
+                conversationId: conversation.id,
+                content,
+                model,
+                embeddingModel,
+              }),
+            ]).catch(() => {});
+          })
+          .catch((error) => {
+            event.sender.send(channels.events.streamError, {
+              requestId,
+              conversationId: conversation.id,
+              error: error.name === 'AbortError' ? 'Discussion cancelled.' : error.message,
+            });
+          })
+          .finally(() => {
+            activeGenerations.delete(requestId);
+            wrapUpRequests.delete(requestId);
+          });
+
+        return { requestId, conversation, userMessage, mode: 'roundtable', experts: hubs, rounds };
+      }
+    }
+
     // Assemble every context layer for this turn (web grounding, Expert panel with
     // planning/hybrid retrieval/reranking/aggregation, memory, profile) plus the
     // grounding payload and Expert suggestions. See electron/contextBuilder.cjs.
@@ -413,6 +563,16 @@ function registerIpcHandlers({ userDataPath }) {
       conversation,
       userMessage,
     };
+  });
+
+  // "Answer now": stop going around the table and have the moderator wrap up. The
+  // orchestrator checks this between turns, so the turn in flight still completes.
+  ipcMain.handle(channels.chat.answerNow, async (_event, requestId) => {
+    if (!activeGenerations.has(requestId)) {
+      return { requested: false };
+    }
+    wrapUpRequests.add(requestId);
+    return { requested: true };
   });
 
   ipcMain.handle(channels.chat.cancelGeneration, async (_event, requestId) => {

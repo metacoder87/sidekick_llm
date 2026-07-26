@@ -7,7 +7,7 @@ const { randomUUID } = require('node:crypto');
 // MIGRATIONS whenever the schema changes. The corpus is the project's asset
 // (see ROADMAP.md §3) — every migration runs behind a backup and an integrity
 // check so a bad upgrade can never destroy user data.
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 const MAX_BACKUPS = 5;
 
 const DEFAULT_TITLE = 'New conversation';
@@ -27,6 +27,12 @@ const DEFAULT_SETTINGS = {
   // research query generation). Empty = use the active chat model. Lets a user chat
   // with a large model while cheap background tasks run on a small one (invariant #5).
   backgroundModel: '',
+  // Multi-Expert conversation style: 'synthesized' (one blended answer) or
+  // 'roundtable' (each Expert speaks in its own grounded voice, then a moderator
+  // consolidates). See ROADMAP Stage 2.5.
+  panelMode: 'synthesized',
+  // Rounds of Expert turns before the moderator wraps up (roundtable mode).
+  roundtableRounds: '1',
 };
 
 const DEFAULT_PROFILE = {
@@ -317,6 +323,18 @@ class ConversationRepository {
           }
         },
       },
+      {
+        // Roundtable turn attribution: in a deliberation each Expert's contribution
+        // is its own assistant message, so history reloads coherently and every turn
+        // keeps its own citations (ROADMAP Stage 2.5).
+        version: 7,
+        up: () => {
+          this.addColumnIfMissing('messages', 'expert_id', 'TEXT');
+          this.addColumnIfMissing('messages', 'expert_name', 'TEXT');
+          this.addColumnIfMissing('messages', 'round', 'INTEGER');
+          this.addColumnIfMissing('messages', 'turn_kind', 'TEXT');
+        },
+      },
     ];
 
     // Guard against drift: the migration list must reach the declared version.
@@ -365,6 +383,10 @@ class ConversationRepository {
         role TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant')),
         content TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'complete',
+        expert_id TEXT,
+        expert_name TEXT,
+        round INTEGER,
+        turn_kind TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
       );
@@ -820,6 +842,10 @@ class ConversationRepository {
           role,
           content,
           status,
+          expert_id AS expertId,
+          expert_name AS expertName,
+          round,
+          turn_kind AS turnKind,
           created_at AS createdAt
         FROM messages
         WHERE conversation_id = ?
@@ -840,7 +866,18 @@ class ConversationRepository {
     };
   }
 
-  addMessage({ conversationId, role, content, status = 'complete' }) {
+  addMessage({
+    conversationId,
+    role,
+    content,
+    status = 'complete',
+    // Roundtable attribution: which Expert spoke, in which round, and whether this
+    // was an Expert turn or the moderator's synthesis (null for ordinary chat).
+    expertId = null,
+    expertName = null,
+    round = null,
+    turnKind = null,
+  }) {
     const timestamp = now();
     const message = {
       id: randomUUID(),
@@ -848,13 +885,18 @@ class ConversationRepository {
       role,
       content: content.trim(),
       status,
+      expertId,
+      expertName,
+      round,
+      turnKind,
       createdAt: timestamp,
     };
 
     this.db
       .prepare(`
-        INSERT INTO messages (id, conversation_id, role, content, status, created_at)
-        VALUES (@id, @conversationId, @role, @content, @status, @createdAt)
+        INSERT INTO messages
+          (id, conversation_id, role, content, status, expert_id, expert_name, round, turn_kind, created_at)
+        VALUES (@id, @conversationId, @role, @content, @status, @expertId, @expertName, @round, @turnKind, @createdAt)
       `)
       .run(message);
 

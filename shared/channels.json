@@ -16,6 +16,7 @@
     "searchConversations": "chat:searchConversations",
     "sendMessageStream": "chat:sendMessageStream",
     "cancelGeneration": "chat:cancelGeneration",
+    "answerNow": "chat:answerNow",
     "exportConversation": "chat:exportConversation",
     "exportAll": "chat:exportAll",
     "importAll": "chat:importAll"
@@ -59,6 +60,9 @@
     "streamUpdate": "events:chat-stream-update",
     "streamComplete": "events:chat-stream-complete",
     "streamError": "events:chat-stream-error",
+    "turnStart": "events:roundtable-turn-start",
+    "turnDelta": "events:roundtable-turn-delta",
+    "turnComplete": "events:roundtable-turn-complete",
     "researchProgress": "events:research-progress"
   }
 }

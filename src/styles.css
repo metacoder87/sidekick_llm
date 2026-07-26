@@ -990,3 +990,44 @@ button {
   font-size: 0.78rem;
   opacity: 0.85;
 }
+
+/* Roundtable: live status + per-turn styling */
+.roundtable-status {
+  margin: 0 16px 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  align-self: flex-start;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 0.78rem;
+}
+
+.rounds-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.76rem;
+  opacity: 0.85;
+}
+
+.rounds-field select {
+  padding: 2px 4px;
+  font-size: 0.76rem;
+}
+
+/* A moderator turn is the answer the user reads — give it emphasis. */
+.message.turn-moderator {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+}
+
+/* A pass is information, not content — keep it quiet. */
+.message.turn-pass {
+  opacity: 0.55;
+  font-style: italic;
+}
+
+.message.turn-pass .message__body {
+  font-size: 0.82rem;
+}

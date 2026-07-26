@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('sidekick', {
     searchConversations: (query) => ipcRenderer.invoke(channels.chat.searchConversations, query),
     sendMessageStream: (payload) => ipcRenderer.invoke(channels.chat.sendMessageStream, payload),
     cancelGeneration: (requestId) => ipcRenderer.invoke(channels.chat.cancelGeneration, requestId),
+    answerNow: (requestId) => ipcRenderer.invoke(channels.chat.answerNow, requestId),
     exportConversation: (conversationId) => ipcRenderer.invoke(channels.chat.exportConversation, conversationId),
     exportAll: () => ipcRenderer.invoke(channels.chat.exportAll),
     importAll: () => ipcRenderer.invoke(channels.chat.importAll),
@@ -70,5 +71,8 @@ contextBridge.exposeInMainWorld('sidekick', {
     onStreamComplete: (listener) => subscribe(channels.events.streamComplete, listener),
     onStreamError: (listener) => subscribe(channels.events.streamError, listener),
     onResearchProgress: (listener) => subscribe(channels.events.researchProgress, listener),
+    onTurnStart: (listener) => subscribe(channels.events.turnStart, listener),
+    onTurnDelta: (listener) => subscribe(channels.events.turnDelta, listener),
+    onTurnComplete: (listener) => subscribe(channels.events.turnComplete, listener),
   },
 });

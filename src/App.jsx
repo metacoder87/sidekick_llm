@@ -58,6 +58,12 @@ export default function App() {
   const [activeSpecialistIds, setActiveSpecialistIds] = useState([]);
   const [activeSpecialistHubs, setActiveSpecialistHubs] = useState([]);
 
+  // Roundtable: 'synthesized' (one blended answer) vs 'roundtable' (each Expert
+  // speaks, then a moderator consolidates), plus how many rounds to go around.
+  const [panelMode, setPanelMode] = useState('synthesized');
+  const [rounds, setRounds] = useState(1);
+  const [roundtableStatus, setRoundtableStatus] = useState(null);
+
   const deferredSearch = useDeferredValue(searchQuery);
   const messagesRef = useRef(null);
 
@@ -103,6 +109,12 @@ export default function App() {
       }
       if (allSettings.activeTheme) {
         setTheme(allSettings.activeTheme);
+      }
+      if (allSettings.panelMode) {
+        setPanelMode(allSettings.panelMode);
+      }
+      if (allSettings.roundtableRounds) {
+        setRounds(Number(allSettings.roundtableRounds) || 1);
       }
     }
   }
@@ -257,6 +269,22 @@ export default function App() {
     const removeComplete = sidekick.events.onStreamComplete((payload) => {
       setStreamRequestId((currentId) => (currentId === payload.requestId ? '' : currentId));
       setConversations((items) => moveConversationToFront(items, payload.conversation));
+
+      // A roundtable finishes with no single message — its turns already arrived via
+      // the turn events. Only refresh the conversation metadata and clear status.
+      if (payload.roundtable) {
+        setRoundtableStatus(null);
+        if (payload.roundtable.stoppedEarly) {
+          setNotice(`Discussion ended early: ${payload.roundtable.stoppedEarly}.`);
+        }
+        setActiveConversation((current) =>
+          current && current.id === payload.conversationId
+            ? { ...current, ...payload.conversation, messages: current.messages }
+            : current,
+        );
+        return;
+      }
+
       setActiveConversation((current) => {
         if (!current || current.id !== payload.conversationId) {
           return current;
@@ -290,10 +318,77 @@ export default function App() {
       });
     });
 
+    // ---- Roundtable turn events -------------------------------------------------
+    // Each Expert's turn streams in as its own message, so the user watches the
+    // discussion happen instead of waiting for a single answer.
+    const removeTurnStart = sidekick.events.onTurnStart((payload) => {
+      setRoundtableStatus(
+        payload.kind === 'moderator'
+          ? 'Moderator is summarizing the discussion…'
+          : `Round ${payload.round} of ${payload.totalRounds} — ${payload.expertName} is speaking…`,
+      );
+      setActiveConversation((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          messages: [
+            ...current.messages,
+            {
+              id: `turn:${payload.turnId}`,
+              role: 'assistant',
+              content: '',
+              expertName: payload.expertName,
+              round: payload.round,
+              turnKind: payload.kind,
+              status: 'streaming',
+              createdAt: new Date().toISOString(),
+            },
+          ],
+        };
+      });
+    });
+
+    const removeTurnDelta = sidekick.events.onTurnDelta((payload) => {
+      setActiveConversation((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          messages: current.messages.map((message) =>
+            message.id === `turn:${payload.turnId}`
+              ? { ...message, content: payload.content }
+              : message,
+          ),
+        };
+      });
+    });
+
+    const removeTurnComplete = sidekick.events.onTurnComplete((payload) => {
+      setActiveConversation((current) => {
+        if (!current) return current;
+        const placeholderId = `turn:${payload.turnId}`;
+        const finalMessage = {
+          ...payload.message,
+          expertName: payload.expertName,
+          round: payload.round,
+          turnKind: payload.kind === 'moderator' ? 'moderator' : payload.passed ? 'pass' : 'expert',
+        };
+        const hasPlaceholder = current.messages.some((m) => m.id === placeholderId);
+        return {
+          ...current,
+          messages: hasPlaceholder
+            ? current.messages.map((m) => (m.id === placeholderId ? finalMessage : m))
+            : [...current.messages, finalMessage],
+        };
+      });
+    });
+
     return () => {
       removeUpdate();
       removeComplete();
       removeError();
+      removeTurnStart();
+      removeTurnDelta();
+      removeTurnComplete();
     };
   }, [sidekick]);
 
@@ -398,10 +493,18 @@ export default function App() {
       content,
       webSearchOverride: webSearchEnabled,
       activeSpecialistIds,
+      panelModeOverride: panelMode,
+      roundsOverride: rounds,
     });
 
     setStreamRequestId(result.requestId);
     setConversations((items) => moveConversationToFront(items, result.conversation));
+
+    const isRoundtable = result.mode === 'roundtable';
+    if (isRoundtable) {
+      setRoundtableStatus('Convening the table…');
+    }
+
     setActiveConversation((current) => {
       const baseMessages =
         current && current.id === result.conversation.id ? current.messages : [];
@@ -411,16 +514,43 @@ export default function App() {
         messages: [
           ...baseMessages,
           result.userMessage,
-          {
-            id: `stream:${result.requestId}`,
-            role: 'assistant',
-            content: '',
-            createdAt: new Date().toISOString(),
-            status: 'streaming',
-          },
+          // In roundtable mode each Expert's turn arrives as its own message via the
+          // turn events, so there is no single placeholder to fill.
+          ...(isRoundtable
+            ? []
+            : [
+                {
+                  id: `stream:${result.requestId}`,
+                  role: 'assistant',
+                  content: '',
+                  createdAt: new Date().toISOString(),
+                  status: 'streaming',
+                },
+              ]),
         ],
       };
     });
+  }
+
+  async function handlePanelModeChange(nextMode) {
+    setPanelMode(nextMode);
+    if (sidekick) {
+      await sidekick.settings.set('panelMode', nextMode);
+    }
+  }
+
+  async function handleRoundsChange(nextRounds) {
+    setRounds(nextRounds);
+    if (sidekick) {
+      await sidekick.settings.set('roundtableRounds', String(nextRounds));
+    }
+  }
+
+  // Stop going around the table; the moderator wraps up with what has been said.
+  async function handleAnswerNow() {
+    if (!sidekick || !streamRequestId) return;
+    setRoundtableStatus('Wrapping up — moderator will answer shortly…');
+    await sidekick.chat.answerNow(streamRequestId);
   }
 
   async function handleCancelGeneration() {
@@ -562,6 +692,10 @@ export default function App() {
           </div>
         </header>
 
+        {roundtableStatus ? (
+          <div className="roundtable-status">🗣️ {roundtableStatus}</div>
+        ) : null}
+
         <div className="workspace__chat" ref={messagesRef}>
           <ChatView
             conversation={activeConversation}
@@ -580,6 +714,13 @@ export default function App() {
           onToggleWebSearch={handleToggleWebSearch}
           onSend={handleSendMessage}
           onCancel={handleCancelGeneration}
+          expertCount={activeSpecialistHubs.length}
+          panelMode={panelMode}
+          onPanelModeChange={handlePanelModeChange}
+          rounds={rounds}
+          onRoundsChange={handleRoundsChange}
+          onAnswerNow={handleAnswerNow}
+          isRoundtableRunning={!!streamRequestId && !!roundtableStatus}
         />
       </section>
 
