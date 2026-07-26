@@ -44,7 +44,9 @@
     "create": "specialist:create",
     "update": "specialist:update",
     "delete": "specialist:delete",
-    "reindex": "specialist:reindex"
+    "reindex": "specialist:reindex",
+    "exportPack": "specialist:exportPack",
+    "importPack": "specialist:importPack"
   },
   "research": {
     "start": "research:start",

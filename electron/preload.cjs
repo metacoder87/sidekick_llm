@@ -55,6 +55,8 @@ contextBridge.exposeInMainWorld('sidekick', {
     update: (hubData) => ipcRenderer.invoke(channels.specialist.update, hubData),
     delete: (id) => ipcRenderer.invoke(channels.specialist.delete, id),
     reindex: (hubId) => ipcRenderer.invoke(channels.specialist.reindex, { hubId }),
+    exportPack: (hubId) => ipcRenderer.invoke(channels.specialist.exportPack, hubId),
+    importPack: () => ipcRenderer.invoke(channels.specialist.importPack),
   },
   research: {
     start: (payload) => ipcRenderer.invoke(channels.research.start, payload),

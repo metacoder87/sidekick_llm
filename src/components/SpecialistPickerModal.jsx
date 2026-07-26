@@ -20,6 +20,30 @@ export default function SpecialistPickerModal({
   const isSelected = (id) => activeSpecialistIds.includes(id);
   const noneSelected = activeSpecialistIds.length === 0;
   const [hubs, setHubs] = useState([]);
+  const [packStatus, setPackStatus] = useState('');
+
+  // Installing a pack creates a new Expert locally. If the pack's vectors came from
+  // a different embedding model they cannot be retrieved until re-indexed — say so
+  // plainly rather than handing the user a silently dead vault.
+  async function handleImportPack() {
+    if (!sidekick) return;
+    setPackStatus('Installing Expert Pack…');
+    try {
+      const res = await sidekick.specialist.importPack();
+      if (res.cancelled) {
+        setPackStatus('');
+        return;
+      }
+      setPackStatus(
+        res.retrievable
+          ? `✅ Installed "${res.hub.name}" — ${res.chunksImported} chunks, ${res.notesImported} notes.`
+          : `⚠️ Installed "${res.hub.name}" (${res.chunksImported} chunks), but it was built with ${res.packEmbeddingModels.join(', ') || 'another model'} and your embedding model is ${res.currentEmbeddingModel}. Open it and choose "Re-index Knowledge Vault" to make it searchable.`,
+      );
+      await loadHubs();
+    } catch (err) {
+      setPackStatus(`Error: ${err.message}`);
+    }
+  }
 
   async function loadHubs() {
     if (!sidekick) return;
@@ -122,6 +146,8 @@ export default function SpecialistPickerModal({
           ))}
         </div>
 
+        {packStatus ? <div className="status-notice-banner">{packStatus}</div> : null}
+
         <div className="modal-actions">
           <button
             type="button"
@@ -132,6 +158,14 @@ export default function SpecialistPickerModal({
             }}
           >
             + Create New AI Specialist Hub
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={handleImportPack}
+            title="Install an Expert shared as a pack file"
+          >
+            📦 Install Expert Pack
           </button>
           <button type="button" className="primary-button" onClick={onClose}>
             Done{activeSpecialistIds.length > 0 ? ` (${activeSpecialistIds.length} consulting)` : ''}

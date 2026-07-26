@@ -74,6 +74,27 @@ export default function SpecialistModal({
 
   const staleCount = Math.max(0, stats.chunkCount - stats.retrievableChunkCount);
 
+  // Export this Expert as a portable pack — shareable, and a backup of one vault.
+  async function handleExportPack() {
+    if (!sidekick || !hubToEdit?.id) return;
+    setLoading(true);
+    setStatusMessage('Exporting Expert Pack…');
+    try {
+      const res = await sidekick.specialist.exportPack(hubToEdit.id);
+      if (res.cancelled) {
+        setStatusMessage('');
+        return;
+      }
+      setStatusMessage(
+        `✅ Exported ${res.manifest.chunkCount} chunks and ${res.manifest.noteCount} notes to ${res.filePath}`,
+      );
+    } catch (err) {
+      setStatusMessage(`Error: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
     if (sidekick?.events?.onResearchProgress) {
       const removeProgress = sidekick.events.onResearchProgress((payload) => {
@@ -340,6 +361,18 @@ export default function SpecialistModal({
               >
                 📄 Upload & Index PDF / Text Document
               </button>
+
+              {isEditing ? (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={handleExportPack}
+                  disabled={loading}
+                  title="Save this Expert — persona, vault and notes — as a portable pack"
+                >
+                  📦 Export Expert Pack
+                </button>
+              ) : null}
             </div>
           </div>
 

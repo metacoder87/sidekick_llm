@@ -1060,6 +1060,138 @@ class ConversationRepository {
   }
 
   // Raw chunk rows for a hub, including the stored embedding JSON, for export.
+  // ---- Expert Packs --------------------------------------------------------------
+  // A portable, versioned export of ONE Expert: persona, vault chunks (with their
+  // citation provenance), and notes. Shareable, backup-able, and the unit a
+  // marketplace would distribute (ROADMAP §5a / Stage 7).
+  //
+  // The manifest records which embedding model built the vectors, because importing
+  // a pack onto a machine using a different embedding model yields chunks that are
+  // present but unretrievable — the exact silent failure the embedding contract
+  // exists to prevent. Import surfaces the mismatch and offers a re-index.
+  exportExpertPack(hubId) {
+    const hub = this.getSpecialistHub(hubId);
+    if (!hub) {
+      return null;
+    }
+
+    const chunks = this.listSpecialistChunksForExport(hubId);
+    const embeddingModels = [...new Set(chunks.map((c) => c.embeddingModel).filter(Boolean))];
+
+    return {
+      app: 'sidekick-llm',
+      kind: 'expert-pack',
+      packVersion: 1,
+      schemaVersion: this.getSchemaVersion(),
+      exportedAt: now(),
+      manifest: {
+        name: hub.name,
+        chunkCount: chunks.length,
+        noteCount: this.countNotes(hubId),
+        embeddingModels,
+        // Distinct source documents/URLs, so a recipient can see what it was built
+        // from before importing it.
+        sources: [...new Set(chunks.map((c) => c.sourceTitle).filter(Boolean))].slice(0, 200),
+      },
+      expert: {
+        name: hub.name,
+        description: hub.description,
+        systemPrompt: hub.systemPrompt,
+        icon: hub.icon,
+      },
+      chunks,
+      notes: this.listNotes(hubId),
+    };
+  }
+
+  // Installs a pack as a NEW Expert. Ids are regenerated so a pack can be installed
+  // more than once and can never collide with an existing Expert.
+  importExpertPack(pack, { nameSuffix = '' } = {}) {
+    if (!pack || pack.app !== 'sidekick-llm' || pack.kind !== 'expert-pack') {
+      throw new Error('That file is not a Sidekick Expert Pack.');
+    }
+    if (!pack.expert || !pack.expert.name) {
+      throw new Error('Expert Pack is missing its expert definition.');
+    }
+
+    const currentEmbeddingModel = this.getSetting('embeddingModel');
+    const packModels = (pack.manifest && pack.manifest.embeddingModels) || [];
+    const retrievable = packModels.length === 0 || packModels.includes(currentEmbeddingModel);
+
+    const hub = this.createSpecialistHub({
+      name: `${pack.expert.name}${nameSuffix}`,
+      description: pack.expert.description || '',
+      systemPrompt: pack.expert.systemPrompt || '',
+      icon: pack.expert.icon || 'brain',
+    });
+
+    const insertChunk = this.db.prepare(`
+      INSERT INTO specialist_chunks
+        (id, hub_id, source_title, source_url, chunk_text, embedding_json, embedding_model, embedding_dim,
+         location, page, char_start, char_end, source_type, created_at)
+      VALUES (@id, @hubId, @sourceTitle, @sourceUrl, @chunkText, @embeddingJson, @embeddingModel, @embeddingDim,
+         @location, @page, @charStart, @charEnd, @sourceType, @createdAt)
+    `);
+    const insertNote = this.db.prepare(`
+      INSERT INTO notes (id, hub_id, title, body, author, source_conversation_id, created_at, updated_at)
+      VALUES (@id, @hubId, @title, @body, @author, NULL, @createdAt, @updatedAt)
+    `);
+
+    let chunksImported = 0;
+    let notesImported = 0;
+    const timestamp = now();
+
+    const run = this.db.transaction(() => {
+      for (const chunk of pack.chunks || []) {
+        if (!chunk.chunkText || !chunk.embeddingJson) continue;
+        insertChunk.run({
+          id: randomUUID(),
+          hubId: hub.id,
+          sourceTitle: chunk.sourceTitle || 'Imported source',
+          sourceUrl: chunk.sourceUrl || '',
+          chunkText: chunk.chunkText,
+          embeddingJson: chunk.embeddingJson,
+          embeddingModel: chunk.embeddingModel ?? null,
+          embeddingDim: chunk.embeddingDim ?? null,
+          location: chunk.location ?? null,
+          page: chunk.page ?? null,
+          charStart: chunk.charStart ?? null,
+          charEnd: chunk.charEnd ?? null,
+          sourceType: chunk.sourceType ?? null,
+          createdAt: chunk.createdAt || timestamp,
+        });
+        chunksImported += 1;
+      }
+
+      for (const note of pack.notes || []) {
+        if (!note.body) continue;
+        insertNote.run({
+          id: randomUUID(),
+          hubId: hub.id,
+          title: note.title || note.body.slice(0, 60),
+          body: note.body,
+          author: note.author || 'user',
+          createdAt: note.createdAt || timestamp,
+          updatedAt: note.updatedAt || timestamp,
+        });
+        notesImported += 1;
+      }
+    });
+
+    run();
+
+    return {
+      hub: this.getSpecialistHub(hub.id),
+      chunksImported,
+      notesImported,
+      // Honest reporting: say plainly when the imported vault will not retrieve
+      // until it is re-indexed with the local embedding model.
+      retrievable,
+      packEmbeddingModels: packModels,
+      currentEmbeddingModel,
+    };
+  }
+
   listSpecialistChunksForExport(hubId) {
     return this.db
       .prepare(`

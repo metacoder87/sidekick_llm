@@ -132,6 +132,50 @@ function registerIpcHandlers({ userDataPath }) {
     return { success };
   });
 
+  // Expert Packs: share, back up, or install a single Expert.
+  ipcMain.handle(channels.specialist.exportPack, async (_event, hubId) => {
+    const pack = repository.exportExpertPack(hubId);
+    if (!pack) {
+      throw new Error('Expert not found.');
+    }
+
+    const safeName = (pack.expert.name || 'expert').replace(/[^a-z0-9\-_ ]/gi, '').trim() || 'expert';
+    const target = await dialog.showSaveDialog({
+      title: 'Export Expert Pack',
+      defaultPath: `${safeName}.sidekick-expert.json`,
+      filters: [{ name: 'Sidekick Expert Pack', extensions: ['json'] }],
+    });
+
+    if (target.canceled || !target.filePath) {
+      return { saved: false, cancelled: true };
+    }
+
+    await fs.writeFile(target.filePath, JSON.stringify(pack, null, 2), 'utf8');
+    return { saved: true, filePath: target.filePath, manifest: pack.manifest };
+  });
+
+  ipcMain.handle(channels.specialist.importPack, async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Install Expert Pack',
+      filters: [{ name: 'Sidekick Expert Pack', extensions: ['json'] }],
+      properties: ['openFile'],
+    });
+
+    if (result.canceled || !result.filePaths[0]) {
+      return { imported: false, cancelled: true };
+    }
+
+    const raw = await fs.readFile(result.filePaths[0], 'utf8');
+    let pack;
+    try {
+      pack = JSON.parse(raw);
+    } catch (_error) {
+      throw new Error('That file is not valid JSON.');
+    }
+
+    return { imported: true, ...repository.importExpertPack(pack) };
+  });
+
   ipcMain.handle(channels.specialist.reindex, async (event, { hubId }) => {
     const embeddingModel = repository.getSetting('embeddingModel');
     const preflight = await ollama.checkEmbedding(embeddingModel);

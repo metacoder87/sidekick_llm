@@ -138,6 +138,78 @@ test('notes are embedded into the vault, re-indexed on edit, and removed on dele
   repository.close();
 });
 
+test('an Expert Pack round-trips persona, vault and notes into a NEW installable Expert', () => {
+  const repository = new ConversationRepository(':memory:');
+  const model = repository.getSetting('embeddingModel');
+
+  const hub = repository.createSpecialistHub({
+    name: 'Legal Expert', description: 'Contracts', systemPrompt: 'Read literally.', icon: 'scale',
+  });
+  repository.saveSpecialistChunk({
+    hubId: hub.id, sourceTitle: 'agreement.pdf', sourceUrl: 'file:///c/a.pdf',
+    chunkText: 'Clause 7.2 caps liability.', embedding: [1, 0, 0], embeddingModel: model,
+    location: 'p. 2', page: 2, sourceType: 'pdf',
+  });
+  repository.createNote({ hubId: hub.id, title: 'Key point', body: 'Liability cap is the negotiation lever.' });
+
+  const pack = repository.exportExpertPack(hub.id);
+  assert.equal(pack.kind, 'expert-pack');
+  assert.equal(pack.manifest.chunkCount, 1);
+  assert.equal(pack.manifest.noteCount, 1);
+  assert.deepEqual(pack.manifest.embeddingModels, [model]);
+  assert.ok(pack.manifest.sources.includes('agreement.pdf'));
+
+  // Installing creates a NEW Expert (never collides with the original).
+  const result = repository.importExpertPack(pack, { nameSuffix: ' (imported)' });
+  assert.equal(result.chunksImported, 1);
+  assert.equal(result.notesImported, 1);
+  assert.equal(result.retrievable, true);
+  assert.notEqual(result.hub.id, hub.id);
+  assert.equal(result.hub.name, 'Legal Expert (imported)');
+
+  // The imported vault is genuinely retrievable, with citation provenance intact.
+  const hits = repository.searchSpecialistVectorMemory(result.hub.id, [1, 0, 0], 4, model);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].page, 2);
+  assert.equal(hits[0].location, 'p. 2');
+  assert.equal(repository.listNotes(result.hub.id)[0].title, 'Key point');
+
+  // Installing the same pack twice is allowed and does not collide.
+  const second = repository.importExpertPack(pack);
+  assert.notEqual(second.hub.id, result.hub.id);
+  assert.equal(repository.listSpecialistHubs().length, 3);
+
+  repository.close();
+});
+
+test('importing a pack built with a different embedding model reports it as not retrievable', () => {
+  const repository = new ConversationRepository(':memory:');
+  const hub = repository.createSpecialistHub({ name: 'Foreign Expert' });
+  repository.saveSpecialistChunk({
+    hubId: hub.id, sourceTitle: 's', chunkText: 'text', embedding: [1, 0, 0, 0],
+    embeddingModel: 'some-other-embedder',
+  });
+
+  const pack = repository.exportExpertPack(hub.id);
+  const result = repository.importExpertPack(pack);
+
+  // Chunks import fine, but they cannot be retrieved until re-indexed — say so
+  // rather than leaving the user with a silently dead vault.
+  assert.equal(result.chunksImported, 1);
+  assert.equal(result.retrievable, false);
+  assert.deepEqual(result.packEmbeddingModels, ['some-other-embedder']);
+  assert.equal(result.currentEmbeddingModel, repository.getSetting('embeddingModel'));
+
+  repository.close();
+});
+
+test('importExpertPack rejects a file that is not an Expert Pack', () => {
+  const repository = new ConversationRepository(':memory:');
+  assert.throws(() => repository.importExpertPack({ app: 'something-else' }), /not a Sidekick Expert Pack/i);
+  assert.throws(() => repository.importExpertPack(null), /not a Sidekick Expert Pack/i);
+  repository.close();
+});
+
 test('specialist hub reports retrievable vs total chunk counts by current embedding model', () => {
   const repository = new ConversationRepository(':memory:');
   const model = repository.getSetting('embeddingModel'); // nomic-embed-text
