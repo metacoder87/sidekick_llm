@@ -550,7 +550,7 @@ capture it; a "re-ingest source" action would repair older ones).
 
 ---
 
-### STAGE 2.5 — Expert Roundtable (multi-turn deliberation)  (~1–2 weeks)
+### STAGE 2.5 — Expert Roundtable (multi-turn deliberation)  ✅ v1+v2 SHIPPED
 *Goal: when several Experts are consulted, let the user watch them actually
 deliberate — each speaking in its own grounded voice, responding to each other over
 N rounds — then have a moderator consolidate. This is the fullest expression of the
@@ -621,13 +621,22 @@ there are no distinct Expert turns and no interaction.
 4. **Cost/benefit of high N.** Diminishing returns past ~3 rounds. Default to 2–3.
 
 #### Phasing
-- [ ] **v1 — Independent panel:** each Expert answers the prompt in its own voice
+- [x] **v1 — Independent panel:** each Expert answers the prompt in its own voice
       (round 1 only), rendered as separate grounded turns + moderator synthesis.
       Parallelizable, fast, delivers most of the value.
-- [ ] **v2 — Deliberation:** rounds 2..N where Experts see and respond to each other,
-      with the transcript budget and the "only speak if you add something" rule.
+- [x] **v2 — Deliberation:** rounds 2..N where Experts see and respond to each other,
+      with the "only speak if you add something" rule and explicit passes.
+      *Shipped together with v1; the transcript budget/digest is deferred to v3.*
 - [ ] **v3 — Polish:** early-stop on convergence, per-round re-retrieval, roundtable
       transcript export, and "save the moderator synthesis as a Note".
+
+**STATUS (2026-07-26): v1 + v2 shipped and verified live.** 2 Experts x 2 rounds +
+moderator on llama3:8b ran in ~21s with correct turn order, per-turn grounding, real
+cross-expert response, and a structured agreed/disagreed synthesis. Experts held
+distinct positions rather than converging once turn identity was stated explicitly.
+**Known limits carried forward:** transcript context is passed whole (no digest yet —
+watch on small models at high N), no per-round re-retrieval, and no automatic
+early-stop on convergence beyond the all-passed case. v3 covers these.
 
 **STAGE 2.5 EXIT:** with 3 Experts and N=3 on a real question, the user sees three
 distinct, individually-cited perspectives, at least one genuine disagreement or
