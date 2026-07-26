@@ -315,15 +315,16 @@ M3 may be sold**, because encryption, packaging, licensing and legal all gate re
 | Milestone | Requires | Viability | Can you… |
 |---|---|---|---|
 | **M0 — Personal prototype** ✅ *(reached 2026-07-24)* | Stages 1–2 | Not distributable | Use it daily yourself. Corpus is safe, Experts work, citations are precise. Unencrypted, unpackaged, unsigned. |
-| **M1 — Demoable** | + Stage 2.5 Roundtable v1, §5a drop-a-doc, single-Expert packs | Showable, not sellable | Present at University; pitch research contracts; record a demo. The differentiators are visible and real. |
+| **M1 — Demoable** ✅ *(reached 2026-07-26)* | + Stage 2.5 Roundtable, §5a drop-a-doc, Expert Packs | Showable, not sellable | Present at University; pitch research contracts; record a demo. The differentiators are visible and real. |
 | **M2 — Design-partner alpha** | + Stage 3, **Stage 4 (encryption, app-lock, audit)** | Private hand-outs only | Give it to a handful of trusted users. Sensitive data is protected, actions are auditable. Still no installer or licence. |
 | **M3 — Commercial v1** 💰 | + Stage 5 minimum bar: packaging, code signing, auto-update, licence activation, EULA + disclaimers, onboarding, crash reporting, CI | **First revenue** | Sell to individuals. A stranger installs, activates, and is productive in 5 minutes. |
 | **M4 — Scaled v1.x** | + sqlite-vec, multi-platform, accessibility, Stage 7 recipe packs & Teams | Growth | Support large corpora (10k+ chunks), sell Expert/Team packs, reach Mac/Linux users. |
 | **M5 — v2 platform** | + Stage 8 Workflow Experts, licensed content packs | New category | Sell orchestrated deliverable production (business plans, literature reviews). Highest ceiling, highest cost. |
 | **E1 — Enterprise** *(parallel)* | Stage 6 (RBAC, multi-user, server/sync, Docker) | Separate product | Sell to firms/clinics — only after Individual validates demand (open Q#4). |
 
-**Recommended build order:** Stage 2.5 v1 → §5a quick wins (drop-a-doc, Expert Packs)
-→ **M1 demo** → Stage 3 → Stage 4 → Stage 5 → **M3 ship & earn** → Stage 7 → Stage 8.
+**Recommended build order:** ~~Stage 2.5 → §5a quick wins → **M1 demo**~~ ✅ done →
+**Stage 3** (grow safely) → **Stage 4** (encryption/app-lock/audit) → **Stage 5**
+→ **M3 ship & earn** → Stage 7 → Stage 8.
 The trap to avoid is building M5 features while M3 never ships.
 
 ## 5. The stages
@@ -975,12 +976,12 @@ AnythingLLM, Msty, Open WebUI) and NotebookLM. Ranked by value ÷ effort. The we
 is **compounding Experts + verifiable citations + deliberation**, not "chat with a
 local model," which is commoditized.
 
-- [ ] **Drop a document straight into the chat (ad-hoc Expert).** Drag a PDF into a
+- [x] **Drop a document straight into the chat (ad-hoc Expert).** ✅ SHIPPED — Drag a PDF into a
       conversation and immediately ask about it, without first creating an Expert;
       offer "keep this as an Expert" afterwards. **Easy** — reuses the whole ingest
       path. Directly fixes cold-start, which is the biggest adoption risk: it is
       NotebookLM's best moment and today Sidekick makes you build an Expert first.
-- [ ] **Expert Packs — single-Expert export/import.** Export one Expert (persona +
+- [x] **Expert Packs — single-Expert export/import.** ✅ SHIPPED — Export one Expert (persona +
       vault + notes + provenance) as a portable file. **Easy** — the full-corpus
       export already exists; this scopes it to one hub. Unlocks sharing with
       colleagues, backup, the starter-Expert library, and the natural licensing unit.
