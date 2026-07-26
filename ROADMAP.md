@@ -804,8 +804,13 @@ strongest answer to cold-start.*
 - [ ] **Expert Packs / Team Packs** — portable, versioned export of one Expert or a
       whole team (personas + vaults + notes + provenance). Builds directly on the
       Stage 1 corpus export; §5a lists the single-Expert version as an early win.
-- [ ] **Marketplace / library** — browse, download, update, and version packs.
-      Local-first: downloading a pack is importing a file, no account required.
+- [x] **Marketplace / library (v1) ✅ SHIPPED** — a built-in, browsable Expert
+      Library: 22 curated templates across Coding/Business/Law/Medicine/Finance/
+      Research/Writing/Lifestyle, searchable and category-filtered, installable in
+      one click. Ships as recipe packs (persona + seed research brief run on the
+      user's machine), so the licensing constraint is satisfied by construction.
+      *Verified: Contract Analyst installed with 27 retrievable chunks in 7.7s.*
+      Still open: remote/downloadable catalog updates and pack versioning.
 - [ ] **⚠️ Content licensing is the gating risk, not the engineering.** A vault holds
       *copies of source text*. Redistributing a pack built from copyrighted journals,
       paywalled case law, or scraped books is infringement — worse in the exact
