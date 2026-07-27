@@ -1,6 +1,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const Database = require('better-sqlite3');
+// Encryption-capable drop-in for better-sqlite3 (same API, same version line) that
+// bundles AES-256 / SQLCipher. With NO key set it reads and writes plain SQLite
+// identically, so adopting the driver changes nothing until a passphrase is
+// configured — encryption stays opt-in (ROADMAP Stage 4).
+const Database = require('better-sqlite3-multiple-ciphers');
 const { randomUUID, createHash } = require('node:crypto');
 
 // The current target schema version. Bump this and append a migration to
