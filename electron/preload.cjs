@@ -100,6 +100,7 @@ contextBridge.exposeInMainWorld('sidekick', {
     onStreamComplete: (listener) => subscribe(channels.events.streamComplete, listener),
     onStreamError: (listener) => subscribe(channels.events.streamError, listener),
     onResearchProgress: (listener) => subscribe(channels.events.researchProgress, listener),
+    onLocked: (listener) => subscribe(channels.events.locked, listener),
     onTurnStart: (listener) => subscribe(channels.events.turnStart, listener),
     onTurnDelta: (listener) => subscribe(channels.events.turnDelta, listener),
     onTurnComplete: (listener) => subscribe(channels.events.turnComplete, listener),

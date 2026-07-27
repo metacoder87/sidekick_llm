@@ -80,6 +80,7 @@
     "turnStart": "events:roundtable-turn-start",
     "turnDelta": "events:roundtable-turn-delta",
     "turnComplete": "events:roundtable-turn-complete",
-    "researchProgress": "events:research-progress"
+    "researchProgress": "events:research-progress",
+    "locked": "events:security-locked"
   }
 }

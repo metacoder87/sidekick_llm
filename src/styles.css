@@ -1418,3 +1418,13 @@ button:focus-visible {
   margin-top: 2px;
   flex-shrink: 0;
 }
+
+.lock-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.lock-row__field {
+  flex: 1;
+}

@@ -2,7 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const fsSync = require('node:fs');
-const { dialog, ipcMain, safeStorage } = require('electron');
+const { BrowserWindow, dialog, ipcMain, powerMonitor, safeStorage } = require('electron');
 
 const channels = require('../shared/channels.json');
 const expertCatalog = require('../shared/expertCatalog.json');
@@ -128,6 +128,41 @@ function registerIpcHandlers({ userDataPath }) {
       keychainAvailable: safeStorage.isEncryptionAvailable(),
     };
   }
+
+  // ---- Auto-lock on idle ---------------------------------------------------------
+  // Uses OS-level idle time rather than window focus: "the user walked away" is the
+  // condition worth locking on, and working in another app should NOT trigger it.
+  // Enforced in the main process so a wedged renderer cannot keep the corpus open.
+  function lockNow(reason) {
+    if (!repository) return;
+    repository.appendAudit({ action: 'security.autolock', detail: reason });
+    closeRepository();
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(channels.events.locked, { reason });
+    }
+  }
+
+  function startAutoLockWatcher() {
+    setInterval(() => {
+      try {
+        // Read the setting each tick so a change takes effect without a restart.
+        if (!repository || !isDatabaseEncrypted(dbPath)) return;
+        const minutes = Number(repository.getSetting('autoLockMinutes') || 0);
+        if (!minutes || minutes <= 0) return;
+        if (powerMonitor.getSystemIdleTime() >= minutes * 60) {
+          lockNow(`idle for ${minutes} minute${minutes === 1 ? '' : 's'}`);
+        }
+      } catch (_error) {
+        // A failing watcher must never take the app down.
+      }
+    }, 30_000).unref?.();
+
+    // Walking away is often signalled explicitly — honour those immediately.
+    powerMonitor.on('suspend', () => lockNow('system suspended'));
+    powerMonitor.on('lock-screen', () => lockNow('workstation locked'));
+  }
+
+  startAutoLockWatcher();
 
   ipcMain.handle(channels.security.status, async () => securityStatus());
 

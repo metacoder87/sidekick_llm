@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [master, 'stage*']
+  pull_request:
+  # Dependencies rot even when the code does not — catch new advisories weekly.
+  schedule:
+    - cron: '0 6 * * 1'
+
+jobs:
+  test:
+    name: Test & audit
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci` runs postinstall, which rebuilds the native SQLite modules against
+      # the Electron ABI — the same path a contributor's machine takes.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer
+        run: npm run build
+
+      # The suite runs under Electron because better-sqlite3(-multiple-ciphers) is
+      # built for the Electron ABI. xvfb is not needed: ELECTRON_RUN_AS_NODE means
+      # no window is created.
+      - name: Run tests
+        run: npm test
+
+      # Fail the build on a genuinely exploitable dependency, not on dev-only noise.
+      - name: Audit production dependencies
+        run: npm run audit:prod
+
+      - name: Audit all dependencies (advisory only)
+        run: npm audit || echo "::warning::Advisories present in dev dependencies — review, not blocking."

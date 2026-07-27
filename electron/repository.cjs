@@ -37,6 +37,9 @@ const DEFAULT_SETTINGS = {
   panelMode: 'synthesized',
   // Rounds of Expert turns before the moderator wraps up (roundtable mode).
   roundtableRounds: '1',
+  // Minutes of inactivity before an encrypted corpus re-locks itself. '0' disables.
+  // Only meaningful when encryption is on — there is nothing to lock otherwise.
+  autoLockMinutes: '0',
 };
 
 const DEFAULT_PROFILE = {

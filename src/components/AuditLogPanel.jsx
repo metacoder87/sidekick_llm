@@ -34,10 +34,13 @@ function EncryptionControls({ sidekick }) {
   const [acknowledged, setAcknowledged] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  const [autoLock, setAutoLock] = useState('0');
 
   async function refresh() {
     if (!sidekick?.security) return;
     setSec(await sidekick.security.status().catch(() => null));
+    const settings = await sidekick.settings.get().catch(() => null);
+    if (settings?.autoLockMinutes) setAutoLock(String(settings.autoLockMinutes));
   }
 
   useEffect(() => {
@@ -111,6 +114,43 @@ function EncryptionControls({ sidekick }) {
           <div className="audit-verify audit-verify--ok">
             🔒 This corpus is encrypted. It cannot be opened without your passphrase.
           </div>
+
+          <div className="lock-row">
+            <label className="form-field lock-row__field">
+              <span>Auto-lock after inactivity</span>
+              <select
+                value={autoLock}
+                disabled={busy}
+                onChange={async (event) => {
+                  const value = event.target.value;
+                  setAutoLock(value);
+                  await sidekick.settings.set('autoLockMinutes', value);
+                }}
+              >
+                <option value="0">Never</option>
+                <option value="5">5 minutes</option>
+                <option value="15">15 minutes</option>
+                <option value="30">30 minutes</option>
+                <option value="60">1 hour</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={busy}
+              onClick={async () => {
+                await sidekick.security.lock();
+                window.location.reload();
+              }}
+              title="Close the corpus now and require the passphrase again"
+            >
+              🔒 Lock now
+            </button>
+          </div>
+          <p className="modal-description">
+            Sidekick also locks when the computer sleeps or the workstation is locked.
+            Inactivity is measured system-wide, so working in another app will not lock you out.
+          </p>
 
           <label className="form-field">
             <span>Current passphrase</span>

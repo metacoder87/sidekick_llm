@@ -241,6 +241,20 @@ export default function App() {
     await bootstrap().catch((error) => setNotice(error.message));
   }
 
+  // The main process can lock the corpus on its own (idle, suspend, workstation
+  // lock). Clear the in-memory view as well — otherwise the corpus would be closed
+  // on disk while its contents stayed on screen.
+  useEffect(() => {
+    if (!sidekick?.events?.onLocked) return undefined;
+    return sidekick.events.onLocked((payload) => {
+      setActiveConversation(null);
+      setConversations([]);
+      setActiveSpecialistHubs([]);
+      setSecurity({ encrypted: true, locked: true, unlocked: false, remembered: false });
+      setNotice(`Locked — ${payload?.reason || 'inactivity'}.`);
+    });
+  }, [sidekick]);
+
   useEffect(() => {
     if (!sidekick) {
       return;
