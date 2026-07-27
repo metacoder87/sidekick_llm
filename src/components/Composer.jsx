@@ -81,14 +81,19 @@ export default function Composer({
               </button>
 
               {roundtable ? (
-                <label className="rounds-field" title="How many times each Expert speaks before the moderator wraps up">
+                <label
+                  className="rounds-field"
+                  title="How many times each Expert speaks before the moderator wraps up"
+                >
                   <span>Rounds</span>
                   <select
                     value={String(rounds)}
                     onChange={(event) => onRoundsChange(Number(event.target.value))}
                   >
                     {[1, 2, 3, 4, 5].map((n) => (
-                      <option key={n} value={n}>{n}</option>
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
                     ))}
                   </select>
                 </label>

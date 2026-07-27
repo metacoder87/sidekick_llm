@@ -67,7 +67,8 @@ export default function MemoryVaultModal({ isOpen, onClose, sidekick }) {
         </div>
 
         <p className="modal-description">
-          Memories and facts stored here are automatically retrieved into model prompts across all your conversations to personalize responses.
+          Memories and facts stored here are automatically retrieved into model prompts across all
+          your conversations to personalize responses.
         </p>
 
         <form onSubmit={handleAddMemory} className="memory-add-form">

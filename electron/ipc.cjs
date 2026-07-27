@@ -56,7 +56,10 @@ function registerIpcHandlers({ userDataPath }) {
 
     // Record the session opening, and any integrity problem, as the first audit
     // entries — a gap in the session record is itself a signal.
-    repository.appendAudit({ action: 'app.open', detail: `schema v${repository.getSchemaVersion()}` });
+    repository.appendAudit({
+      action: 'app.open',
+      detail: `schema v${repository.getSchemaVersion()}`,
+    });
     if (repository.integrity && repository.integrity.ok === false) {
       repository.appendAudit({ action: 'integrity.failed', detail: repository.integrity.detail });
     }
@@ -64,7 +67,11 @@ function registerIpcHandlers({ userDataPath }) {
   }
 
   function closeRepository() {
-    try { if (repository) repository.close(); } catch (_e) { /* ignore */ }
+    try {
+      if (repository) repository.close();
+    } catch (_e) {
+      /* ignore */
+    }
     repository = null;
     memoryManager = null;
     researchWorker = null;
@@ -116,7 +123,11 @@ function registerIpcHandlers({ userDataPath }) {
   }
 
   function forgetRemembered() {
-    try { fsSync.rmSync(keyCachePath, { force: true }); } catch (_e) { /* ignore */ }
+    try {
+      fsSync.rmSync(keyCachePath, { force: true });
+    } catch (_e) {
+      /* ignore */
+    }
   }
 
   function securityStatus() {
@@ -168,23 +179,34 @@ function registerIpcHandlers({ userDataPath }) {
 
   ipcMain.handle(channels.security.status, async () => securityStatus());
 
-  ipcMain.handle(channels.security.unlock, async (_event, { passphrase, useRemembered = false } = {}) => {
-    if (repository) return { unlocked: true, ...securityStatus() };
+  ipcMain.handle(
+    channels.security.unlock,
+    async (_event, { passphrase, useRemembered = false } = {}) => {
+      if (repository) return { unlocked: true, ...securityStatus() };
 
-    const secret = useRemembered ? readRemembered() : passphrase;
-    if (!secret) {
-      return { unlocked: false, reason: useRemembered ? 'No remembered passphrase on this device.' : 'Enter your passphrase.' };
-    }
-    if (!canOpenWithPassphrase(dbPath, secret)) {
-      // Do not distinguish "wrong passphrase" from "corrupt file" any further than
-      // this — and never log the attempt's input.
-      return { unlocked: false, reason: 'That passphrase did not open the corpus.' };
-    }
+      const secret = useRemembered ? readRemembered() : passphrase;
+      if (!secret) {
+        return {
+          unlocked: false,
+          reason: useRemembered
+            ? 'No remembered passphrase on this device.'
+            : 'Enter your passphrase.',
+        };
+      }
+      if (!canOpenWithPassphrase(dbPath, secret)) {
+        // Do not distinguish "wrong passphrase" from "corrupt file" any further than
+        // this — and never log the attempt's input.
+        return { unlocked: false, reason: 'That passphrase did not open the corpus.' };
+      }
 
-    openRepository(secret);
-    repository.appendAudit({ action: 'security.unlock', detail: useRemembered ? 'via device keychain' : 'via passphrase' });
-    return { unlocked: true, ...securityStatus() };
-  });
+      openRepository(secret);
+      repository.appendAudit({
+        action: 'security.unlock',
+        detail: useRemembered ? 'via device keychain' : 'via passphrase',
+      });
+      return { unlocked: true, ...securityStatus() };
+    },
+  );
 
   ipcMain.handle(channels.security.lock, async () => {
     if (repository) repository.appendAudit({ action: 'security.lock' });
@@ -192,30 +214,44 @@ function registerIpcHandlers({ userDataPath }) {
     return securityStatus();
   });
 
-  ipcMain.handle(channels.security.enable, async (_event, { passphrase, remember = false } = {}) => {
-    if (isDatabaseEncrypted(dbPath)) {
-      return { ok: false, reason: 'The corpus is already encrypted.' };
-    }
-    if (!passphrase || passphrase.length < 8) {
-      return { ok: false, reason: 'Choose a passphrase of at least 8 characters.' };
-    }
+  ipcMain.handle(
+    channels.security.enable,
+    async (_event, { passphrase, remember = false } = {}) => {
+      if (isDatabaseEncrypted(dbPath)) {
+        return { ok: false, reason: 'The corpus is already encrypted.' };
+      }
+      if (!passphrase || passphrase.length < 8) {
+        return { ok: false, reason: 'Choose a passphrase of at least 8 characters.' };
+      }
 
-    // The rekey rewrites every page, so the database must be closed first.
-    if (repository) repository.appendAudit({ action: 'security.encrypt.start' });
-    closeRepository();
+      // The rekey rewrites every page, so the database must be closed first.
+      if (repository) repository.appendAudit({ action: 'security.encrypt.start' });
+      closeRepository();
 
-    try {
-      const result = rekeyDatabase({ filename: dbPath, newPassphrase: passphrase, backupTag: 'encrypt' });
-      openRepository(passphrase);
-      repository.appendAudit({ action: 'security.encrypt.done', detail: `backup ${result.backupPath}` });
-      if (remember) cacheRemembered(passphrase);
-      return { ok: true, backupPath: result.backupPath, ...securityStatus() };
-    } catch (error) {
-      // Reopen whatever state the corpus is in so the app is never left dead.
-      try { openRepository(isDatabaseEncrypted(dbPath) ? passphrase : null); } catch (_e) { /* stays locked */ }
-      return { ok: false, reason: error.message };
-    }
-  });
+      try {
+        const result = rekeyDatabase({
+          filename: dbPath,
+          newPassphrase: passphrase,
+          backupTag: 'encrypt',
+        });
+        openRepository(passphrase);
+        repository.appendAudit({
+          action: 'security.encrypt.done',
+          detail: `backup ${result.backupPath}`,
+        });
+        if (remember) cacheRemembered(passphrase);
+        return { ok: true, backupPath: result.backupPath, ...securityStatus() };
+      } catch (error) {
+        // Reopen whatever state the corpus is in so the app is never left dead.
+        try {
+          openRepository(isDatabaseEncrypted(dbPath) ? passphrase : null);
+        } catch (_e) {
+          /* stays locked */
+        }
+        return { ok: false, reason: error.message };
+      }
+    },
+  );
 
   ipcMain.handle(channels.security.disable, async (_event, { passphrase } = {}) => {
     if (!isDatabaseEncrypted(dbPath)) {
@@ -227,46 +263,68 @@ function registerIpcHandlers({ userDataPath }) {
 
     closeRepository();
     try {
-      const result = rekeyDatabase({ filename: dbPath, currentPassphrase: passphrase, newPassphrase: '', backupTag: 'decrypt' });
-      forgetRemembered();
-      openRepository(null);
-      repository.appendAudit({ action: 'security.decrypt.done', detail: `backup ${result.backupPath}` });
-      return { ok: true, backupPath: result.backupPath, ...securityStatus() };
-    } catch (error) {
-      try { openRepository(isDatabaseEncrypted(dbPath) ? passphrase : null); } catch (_e) { /* stays locked */ }
-      return { ok: false, reason: error.message };
-    }
-  });
-
-  ipcMain.handle(channels.security.changePassphrase, async (_event, { currentPassphrase, newPassphrase, remember = false } = {}) => {
-    if (!isDatabaseEncrypted(dbPath)) {
-      return { ok: false, reason: 'The corpus is not encrypted.' };
-    }
-    if (!newPassphrase || newPassphrase.length < 8) {
-      return { ok: false, reason: 'Choose a passphrase of at least 8 characters.' };
-    }
-    if (!canOpenWithPassphrase(dbPath, currentPassphrase)) {
-      return { ok: false, reason: 'The current passphrase is incorrect.' };
-    }
-
-    closeRepository();
-    try {
       const result = rekeyDatabase({
         filename: dbPath,
-        currentPassphrase,
-        newPassphrase,
-        backupTag: 'rekey',
+        currentPassphrase: passphrase,
+        newPassphrase: '',
+        backupTag: 'decrypt',
       });
-      openRepository(newPassphrase);
-      repository.appendAudit({ action: 'security.passphrase.changed', detail: `backup ${result.backupPath}` });
       forgetRemembered();
-      if (remember) cacheRemembered(newPassphrase);
+      openRepository(null);
+      repository.appendAudit({
+        action: 'security.decrypt.done',
+        detail: `backup ${result.backupPath}`,
+      });
       return { ok: true, backupPath: result.backupPath, ...securityStatus() };
     } catch (error) {
-      try { openRepository(currentPassphrase); } catch (_e) { /* stays locked */ }
+      try {
+        openRepository(isDatabaseEncrypted(dbPath) ? passphrase : null);
+      } catch (_e) {
+        /* stays locked */
+      }
       return { ok: false, reason: error.message };
     }
   });
+
+  ipcMain.handle(
+    channels.security.changePassphrase,
+    async (_event, { currentPassphrase, newPassphrase, remember = false } = {}) => {
+      if (!isDatabaseEncrypted(dbPath)) {
+        return { ok: false, reason: 'The corpus is not encrypted.' };
+      }
+      if (!newPassphrase || newPassphrase.length < 8) {
+        return { ok: false, reason: 'Choose a passphrase of at least 8 characters.' };
+      }
+      if (!canOpenWithPassphrase(dbPath, currentPassphrase)) {
+        return { ok: false, reason: 'The current passphrase is incorrect.' };
+      }
+
+      closeRepository();
+      try {
+        const result = rekeyDatabase({
+          filename: dbPath,
+          currentPassphrase,
+          newPassphrase,
+          backupTag: 'rekey',
+        });
+        openRepository(newPassphrase);
+        repository.appendAudit({
+          action: 'security.passphrase.changed',
+          detail: `backup ${result.backupPath}`,
+        });
+        forgetRemembered();
+        if (remember) cacheRemembered(newPassphrase);
+        return { ok: true, backupPath: result.backupPath, ...securityStatus() };
+      } catch (error) {
+        try {
+          openRepository(currentPassphrase);
+        } catch (_e) {
+          /* stays locked */
+        }
+        return { ok: false, reason: error.message };
+      }
+    },
+  );
 
   ipcMain.handle(channels.security.setRemember, async (_event, { remember, passphrase } = {}) => {
     if (!remember) {
@@ -313,7 +371,9 @@ function registerIpcHandlers({ userDataPath }) {
       models: modelCatalog.models.map((model) => ({
         ...model,
         // Match "llama3.1:8b" against an installed "llama3.1:8b" or "llama3.1:8b-...".
-        installed: [...installedNames].some((n) => n === model.name || n.startsWith(`${model.name}-`)),
+        installed: [...installedNames].some(
+          (n) => n === model.name || n.startsWith(`${model.name}-`),
+        ),
         fits: hardware.totalRamGB >= model.minRamGB,
         tight: hardware.totalRamGB >= model.minRamGB && hardware.totalRamGB < model.minRamGB * 1.5,
       })),
@@ -438,7 +498,12 @@ function registerIpcHandlers({ userDataPath }) {
       return { note, indexed: false, reason: preflight.reason };
     }
     const result = await researchWorker.indexNote({ note, embeddingModel });
-    return { note, indexed: result.success, reason: result.reason, chunksCount: result.chunksCount };
+    return {
+      note,
+      indexed: result.success,
+      reason: result.reason,
+      chunksCount: result.chunksCount,
+    };
   });
 
   handleSecure(channels.notes.update, async (_event, payload) => {
@@ -452,7 +517,12 @@ function registerIpcHandlers({ userDataPath }) {
       return { note, indexed: false, reason: preflight.reason };
     }
     const result = await researchWorker.indexNote({ note, embeddingModel });
-    return { note, indexed: result.success, reason: result.reason, chunksCount: result.chunksCount };
+    return {
+      note,
+      indexed: result.success,
+      reason: result.reason,
+      chunksCount: result.chunksCount,
+    };
   });
 
   handleSecure(channels.notes.delete, async (_event, id) => {
@@ -477,62 +547,65 @@ function registerIpcHandlers({ userDataPath }) {
     };
   });
 
-  handleSecure(channels.specialist.installFromCatalog, async (event, { templateId, runResearch = true }) => {
-    const template = expertCatalog.templates.find((t) => t.id === templateId);
-    if (!template) {
-      throw new Error('Unknown Expert template.');
-    }
+  handleSecure(
+    channels.specialist.installFromCatalog,
+    async (event, { templateId, runResearch = true }) => {
+      const template = expertCatalog.templates.find((t) => t.id === templateId);
+      if (!template) {
+        throw new Error('Unknown Expert template.');
+      }
 
-    // The persona is available immediately — research fills the vault afterwards, so
-    // the Expert is usable (ungrounded, and labelled as such) from the first second.
-    const hub = repository.createSpecialistHub({
-      name: template.name,
-      description: template.description,
-      systemPrompt: template.systemPrompt,
-      icon: template.icon || 'brain',
-    });
+      // The persona is available immediately — research fills the vault afterwards, so
+      // the Expert is usable (ungrounded, and labelled as such) from the first second.
+      const hub = repository.createSpecialistHub({
+        name: template.name,
+        description: template.description,
+        systemPrompt: template.systemPrompt,
+        icon: template.icon || 'brain',
+      });
 
-    if (!runResearch) {
-      return { installed: true, hub, researched: false };
-    }
+      if (!runResearch) {
+        return { installed: true, hub, researched: false };
+      }
 
-    const embeddingModel = repository.getSetting('embeddingModel');
-    const preflight = await ollama.checkEmbedding(embeddingModel);
-    if (!preflight.ok) {
-      return { installed: true, hub, researched: false, reason: preflight.reason };
-    }
+      const embeddingModel = repository.getSetting('embeddingModel');
+      const preflight = await ollama.checkEmbedding(embeddingModel);
+      if (!preflight.ok) {
+        return { installed: true, hub, researched: false, reason: preflight.reason };
+      }
 
-    let model = repository.getSetting('activeModel');
-    if (!model) {
-      const models = await ollama.listModels();
-      model = models[0]?.name || '';
-    }
+      let model = repository.getSetting('activeModel');
+      if (!model) {
+        const models = await ollama.listModels();
+        model = models[0]?.name || '';
+      }
 
-    const allSettings = repository.getAllSettings();
-    const research = await researchWorker.runWebDeepResearch({
-      hubId: hub.id,
-      topic: template.seedResearch,
-      model: repository.getSetting('backgroundModel') || model,
-      embeddingModel,
-      searchOptions: {
-        provider: allSettings.searchProvider || 'duckduckgo',
-        searxngUrl: allSettings.searxngUrl,
-        tavilyApiKey: allSettings.tavilyApiKey,
-        braveApiKey: allSettings.braveApiKey,
-      },
-      onProgress: (progress) => {
-        event.sender.send(channels.events.researchProgress, { hubId: hub.id, ...progress });
-      },
-    });
+      const allSettings = repository.getAllSettings();
+      const research = await researchWorker.runWebDeepResearch({
+        hubId: hub.id,
+        topic: template.seedResearch,
+        model: repository.getSetting('backgroundModel') || model,
+        embeddingModel,
+        searchOptions: {
+          provider: allSettings.searchProvider || 'duckduckgo',
+          searxngUrl: allSettings.searxngUrl,
+          tavilyApiKey: allSettings.tavilyApiKey,
+          braveApiKey: allSettings.braveApiKey,
+        },
+        onProgress: (progress) => {
+          event.sender.send(channels.events.researchProgress, { hubId: hub.id, ...progress });
+        },
+      });
 
-    return {
-      installed: true,
-      hub: repository.getSpecialistHub(hub.id),
-      researched: research.success,
-      chunksIndexed: research.totalChunks || 0,
-      reason: research.reason,
-    };
-  });
+      return {
+        installed: true,
+        hub: repository.getSpecialistHub(hub.id),
+        researched: research.success,
+        chunksIndexed: research.totalChunks || 0,
+        reason: research.reason,
+      };
+    },
+  );
 
   // Expert Packs: share, back up, or install a single Expert.
   handleSecure(channels.specialist.exportPack, async (_event, hubId) => {
@@ -541,7 +614,8 @@ function registerIpcHandlers({ userDataPath }) {
       throw new Error('Expert not found.');
     }
 
-    const safeName = (pack.expert.name || 'expert').replace(/[^a-z0-9\-_ ]/gi, '').trim() || 'expert';
+    const safeName =
+      (pack.expert.name || 'expert').replace(/[^a-z0-9\-_ ]/gi, '').trim() || 'expert';
     const target = await dialog.showSaveDialog({
       title: 'Export Expert Pack',
       defaultPath: `${safeName}.sidekick-expert.json`,
@@ -728,9 +802,7 @@ function registerIpcHandlers({ userDataPath }) {
   handleSecure(channels.research.ingestFile, async (event, { hubId }) => {
     const result = await dialog.showOpenDialog({
       title: 'Select PDF or Text Document for Specialist Vault',
-      filters: [
-        { name: 'Documents', extensions: ['pdf', 'txt', 'md', 'json', 'csv'] },
-      ],
+      filters: [{ name: 'Documents', extensions: ['pdf', 'txt', 'md', 'json', 'csv'] }],
       properties: ['openFile'],
     });
 
@@ -850,8 +922,7 @@ function registerIpcHandlers({ userDataPath }) {
 
     // Check Settings
     const allSettings = repository.getAllSettings();
-    const isWebSearchEnabled =
-      payload.webSearchOverride ?? (allSettings.webSearchEnabled === 'true');
+    const isWebSearchEnabled = payload.webSearchOverride ?? allSettings.webSearchEnabled === 'true';
 
     // ---- Roundtable mode -------------------------------------------------------
     // When the user has chosen Roundtable and Experts are consulted, each Expert
@@ -1002,29 +1073,27 @@ function registerIpcHandlers({ userDataPath }) {
     // Assemble every context layer for this turn (web grounding, Expert panel with
     // planning/hybrid retrieval/reranking/aggregation, memory, profile) plus the
     // grounding payload and Expert suggestions. See electron/contextBuilder.cjs.
-    const { systemContent, citations, specialistGrounding, suggestedExperts } = await buildChatContext({
-      repository,
-      ollama,
-      memoryManager,
-      researchWorker,
-      content,
-      conversationId: conversation.id,
-      payload,
-      model,
-      embeddingModel,
-      backgroundModel,
-      allSettings,
-      isWebSearchEnabled,
-    });
+    const { systemContent, citations, specialistGrounding, suggestedExperts } =
+      await buildChatContext({
+        repository,
+        ollama,
+        memoryManager,
+        researchWorker,
+        content,
+        conversationId: conversation.id,
+        payload,
+        model,
+        embeddingModel,
+        backgroundModel,
+        allSettings,
+        isWebSearchEnabled,
+      });
     const rawHistory = repository.listMessages(conversation.id).map((message) => ({
       role: message.role,
       content: message.content,
     }));
 
-    const formattedMessages = [
-      { role: 'system', content: systemContent },
-      ...rawHistory,
-    ];
+    const formattedMessages = [{ role: 'system', content: systemContent }, ...rawHistory];
 
     const requestId = randomUUID();
     const abortController = new AbortController();
@@ -1248,4 +1317,3 @@ function registerIpcHandlers({ userDataPath }) {
 module.exports = {
   registerIpcHandlers,
 };
-

@@ -105,12 +105,14 @@ async function planRetrievalQueries({ query, classification, ollama, model }) {
 
   // De-duplicate while preserving order, and cap the fan-out.
   const seen = new Set();
-  return queries.filter((q) => {
-    const key = q.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).slice(0, 5);
+  return queries
+    .filter((q) => {
+      const key = q.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 5);
 }
 
 // Merge match lists retrieved for several queries, keeping each chunk once at its
@@ -119,7 +121,8 @@ function unionMatches(matchLists) {
   const best = new Map();
   for (const list of matchLists || []) {
     for (const match of list || []) {
-      const key = match.chunkId || `${match.sourceTitle || ''}:${(match.chunkText || '').slice(0, 60)}`;
+      const key =
+        match.chunkId || `${match.sourceTitle || ''}:${(match.chunkText || '').slice(0, 60)}`;
       const existing = best.get(key);
       if (!existing || (match.score || 0) > (existing.score || 0)) {
         best.set(key, match);

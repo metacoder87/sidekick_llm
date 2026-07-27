@@ -60,7 +60,11 @@ function EncryptionControls({ sidekick }) {
           ? `✅ Corpus encrypted. Unencrypted backup kept at ${res.backupPath} — move or delete it once you have verified everything works.`
           : `⚠️ ${res.reason}`,
       );
-      if (res.ok) { setPass(''); setConfirm(''); setAcknowledged(false); }
+      if (res.ok) {
+        setPass('');
+        setConfirm('');
+        setAcknowledged(false);
+      }
       await refresh();
     } catch (err) {
       setMsg(`Error: ${err.message}`);
@@ -95,7 +99,10 @@ function EncryptionControls({ sidekick }) {
         remember,
       });
       setMsg(res.ok ? '✅ Passphrase changed.' : `⚠️ ${res.reason}`);
-      if (res.ok) { setPass(''); setConfirm(''); }
+      if (res.ok) {
+        setPass('');
+        setConfirm('');
+      }
       await refresh();
     } catch (err) {
       setMsg(`Error: ${err.message}`);
@@ -148,62 +155,100 @@ function EncryptionControls({ sidekick }) {
             </button>
           </div>
           <p className="modal-description">
-            Sidekick also locks when the computer sleeps or the workstation is locked.
-            Inactivity is measured system-wide, so working in another app will not lock you out.
+            Sidekick also locks when the computer sleeps or the workstation is locked. Inactivity is
+            measured system-wide, so working in another app will not lock you out.
           </p>
 
           <label className="form-field">
             <span>Current passphrase</span>
-            <input id="current-pass" type="password" placeholder="Current passphrase" disabled={busy} />
+            <input
+              id="current-pass"
+              type="password"
+              placeholder="Current passphrase"
+              disabled={busy}
+            />
           </label>
           <label className="form-field">
             <span>New passphrase (leave blank to only remove encryption)</span>
-            <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} disabled={busy} />
+            <input
+              type="password"
+              value={pass}
+              onChange={(e) => setPass(e.target.value)}
+              disabled={busy}
+            />
           </label>
           <label className="form-field">
             <span>Confirm new passphrase</span>
-            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} disabled={busy} />
+            <input
+              type="password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              disabled={busy}
+            />
           </label>
 
           <div className="modal-actions">
-            <button type="button" className="secondary-button" onClick={change} disabled={busy || !pass}>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={change}
+              disabled={busy || !pass}
+            >
               Change passphrase
             </button>
-            <button type="button" className="ghost-button danger" onClick={disable} disabled={busy || !pass}>
+            <button
+              type="button"
+              className="ghost-button danger"
+              onClick={disable}
+              disabled={busy || !pass}
+            >
               Remove encryption
             </button>
           </div>
           <p className="modal-description">
-            To remove encryption, enter your current passphrase in the “New passphrase” field
-            and press Remove encryption.
+            To remove encryption, enter your current passphrase in the “New passphrase” field and
+            press Remove encryption.
           </p>
         </>
       ) : (
         <>
           <p className="modal-description">
-            Encrypts the entire database — conversations, Experts, notes and memory — with
-            AES-256. Without the passphrase the file cannot be read, even by copying it to
-            another machine.
+            Encrypts the entire database — conversations, Experts, notes and memory — with AES-256.
+            Without the passphrase the file cannot be read, even by copying it to another machine.
           </p>
 
           <div className="encryption-warning">
-            <strong>⚠️ There is no recovery.</strong> If you lose this passphrase your corpus
-            is unrecoverable — there is no reset, and I cannot help you get back in. Store it
-            in a password manager, and export your corpus first.
+            <strong>⚠️ There is no recovery.</strong> If you lose this passphrase your corpus is
+            unrecoverable — there is no reset, and I cannot help you get back in. Store it in a
+            password manager, and export your corpus first.
           </div>
 
           <label className="form-field">
             <span>Passphrase (minimum 8 characters)</span>
-            <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} disabled={busy} />
+            <input
+              type="password"
+              value={pass}
+              onChange={(e) => setPass(e.target.value)}
+              disabled={busy}
+            />
           </label>
           <label className="form-field">
             <span>Confirm passphrase</span>
-            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} disabled={busy} />
+            <input
+              type="password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              disabled={busy}
+            />
           </label>
 
           {sec?.keychainAvailable ? (
             <label className="checkbox-field">
-              <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(e) => setRemember(e.target.checked)}
+              />
               <span>Remember on this device (stored in the OS keychain, not in a file)</span>
             </label>
           ) : null}
@@ -214,7 +259,9 @@ function EncryptionControls({ sidekick }) {
               checked={acknowledged}
               onChange={(e) => setAcknowledged(e.target.checked)}
             />
-            <span>I have stored this passphrase somewhere safe and understand it cannot be recovered.</span>
+            <span>
+              I have stored this passphrase somewhere safe and understand it cannot be recovered.
+            </span>
           </label>
 
           <div className="modal-actions">
@@ -276,9 +323,9 @@ export default function AuditLogPanel({ sidekick }) {
 
       <h3 className="audit-heading">Audit log</h3>
       <p className="modal-description">
-        An append-only record of sensitive actions — exports, deletions, installs and
-        settings changes. Each entry is hash-chained to the one before it, so an edited
-        or removed entry is detectable. Secret values (API keys) are never recorded.
+        An append-only record of sensitive actions — exports, deletions, installs and settings
+        changes. Each entry is hash-chained to the one before it, so an edited or removed entry is
+        detectable. Secret values (API keys) are never recorded.
       </p>
 
       {verification ? (

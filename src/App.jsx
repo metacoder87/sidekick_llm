@@ -25,11 +25,7 @@ function replaceStreamingMessage(messages, requestId, nextMessage) {
     return [...messages, nextMessage];
   }
 
-  return messages.map((message) =>
-    message.id === tempId
-      ? nextMessage
-      : message,
-  );
+  return messages.map((message) => (message.id === tempId ? nextMessage : message));
 }
 
 export default function App() {
@@ -106,7 +102,9 @@ export default function App() {
 
   async function refreshOllamaStatus() {
     if (!sidekick) {
-      setNotice('Desktop bridge unavailable. Restart the app to reload the Electron preload script.');
+      setNotice(
+        'Desktop bridge unavailable. Restart the app to reload the Electron preload script.',
+      );
       return;
     }
 
@@ -197,7 +195,9 @@ export default function App() {
     // still exist).
     try {
       const settings = await sidekick.settings.get();
-      const savedIds = settings?.activeSpecialistIds ? JSON.parse(settings.activeSpecialistIds) : [];
+      const savedIds = settings?.activeSpecialistIds
+        ? JSON.parse(settings.activeSpecialistIds)
+        : [];
       if (Array.isArray(savedIds) && savedIds.length > 0) {
         const list = await sidekick.specialist.list().catch(() => []);
         const existing = new Set((list || []).map((h) => h.id));
@@ -227,7 +227,9 @@ export default function App() {
   // refused while locked, so bootstrapping first would just produce errors.
   useEffect(() => {
     if (!sidekick) {
-      setNotice('Desktop bridge unavailable. Restart the app to reload the Electron preload script.');
+      setNotice(
+        'Desktop bridge unavailable. Restart the app to reload the Electron preload script.',
+      );
       return;
     }
 
@@ -471,7 +473,9 @@ export default function App() {
 
     setConversations((items) =>
       items.map((conversation) =>
-        conversation.id === conversationId ? { ...conversation, ...updatedConversation } : conversation,
+        conversation.id === conversationId
+          ? { ...conversation, ...updatedConversation }
+          : conversation,
       ),
     );
 
@@ -560,8 +564,7 @@ export default function App() {
     }
 
     setActiveConversation((current) => {
-      const baseMessages =
-        current && current.id === result.conversation.id ? current.messages : [];
+      const baseMessages = current && current.id === result.conversation.id ? current.messages : [];
 
       return {
         ...result.conversation,
@@ -601,7 +604,9 @@ export default function App() {
     }
 
     setIsIngestingDrop(true);
-    setNotice(`Reading ${filePaths.length === 1 ? '1 document' : `${filePaths.length} documents`}…`);
+    setNotice(
+      `Reading ${filePaths.length === 1 ? '1 document' : `${filePaths.length} documents`}…`,
+    );
     try {
       const result = await sidekick.research.quickIngest({ filePaths });
       if (!result.success) {
@@ -656,7 +661,12 @@ export default function App() {
   async function handleSaveNote({ hubId, content }) {
     if (!sidekick || !hubId || !content) return null;
 
-    const firstLine = content.replace(/[#*`>]/g, '').split('\n').map((s) => s.trim()).find(Boolean) || 'Saved answer';
+    const firstLine =
+      content
+        .replace(/[#*`>]/g, '')
+        .split('\n')
+        .map((s) => s.trim())
+        .find(Boolean) || 'Saved answer';
     const result = await sidekick.notes.create({
       hubId,
       title: firstLine.slice(0, 70),
@@ -741,10 +751,7 @@ export default function App() {
   const activeTitle = activeConversation?.title || 'New Conversation';
 
   return (
-    <main
-      className="app-shell"
-      style={{ gridTemplateColumns: `${sidebarWidth}px auto 1fr` }}
-    >
+    <main className="app-shell" style={{ gridTemplateColumns: `${sidebarWidth}px auto 1fr` }}>
       <Sidebar
         conversations={conversations}
         activeConversationId={activeConversationId}
@@ -848,9 +855,7 @@ export default function App() {
           <div className="roundtable-status">📄 Indexing the document…</div>
         ) : null}
 
-        {roundtableStatus ? (
-          <div className="roundtable-status">🗣️ {roundtableStatus}</div>
-        ) : null}
+        {roundtableStatus ? <div className="roundtable-status">🗣️ {roundtableStatus}</div> : null}
 
         <div className="workspace__chat" ref={messagesRef}>
           <ChatView

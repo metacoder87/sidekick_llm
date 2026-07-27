@@ -97,10 +97,7 @@ function normalizeFact(fact) {
 }
 
 function createAutoTitle(content) {
-  return content
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 72) || DEFAULT_TITLE;
+  return content.replace(/\s+/g, ' ').trim().slice(0, 72) || DEFAULT_TITLE;
 }
 
 function toFtsQuery(input) {
@@ -158,7 +155,11 @@ function canOpenWithPassphrase(filename, passphrase) {
   } catch (_error) {
     return false;
   } finally {
-    try { if (db) db.close(); } catch (_e) { /* ignore */ }
+    try {
+      if (db) db.close();
+    } catch (_e) {
+      /* ignore */
+    }
   }
 }
 
@@ -166,7 +167,12 @@ function canOpenWithPassphrase(filename, passphrase) {
 //   newPassphrase = '<secret>' → encrypt (or change passphrase)
 //   newPassphrase = ''         → decrypt back to plaintext
 // Always takes a backup first: this rewrites every page of the user's corpus.
-function rekeyDatabase({ filename, currentPassphrase = '', newPassphrase = '', backupTag = 'rekey' }) {
+function rekeyDatabase({
+  filename,
+  currentPassphrase = '',
+  newPassphrase = '',
+  backupTag = 'rekey',
+}) {
   if (!fs.existsSync(filename)) {
     throw new Error('Database file not found.');
   }
@@ -191,7 +197,11 @@ function rekeyDatabase({ filename, currentPassphrase = '', newPassphrase = '', b
     db.pragma(`rekey = ${newPassphrase ? quoteKey(newPassphrase) : "''"}`);
     db.pragma('journal_mode = WAL');
   } finally {
-    try { db.close(); } catch (_e) { /* ignore */ }
+    try {
+      db.close();
+    } catch (_e) {
+      /* ignore */
+    }
   }
 
   // Verify the result before telling the user it worked.
@@ -423,7 +433,9 @@ class ConversationRepository {
             .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_memories'`)
             .get();
           if (hasTable) {
-            this.db.exec(`UPDATE user_memories SET reinforced_count = 1 WHERE reinforced_count IS NULL`);
+            this.db.exec(
+              `UPDATE user_memories SET reinforced_count = 1 WHERE reinforced_count IS NULL`,
+            );
           }
         },
       },
@@ -463,9 +475,7 @@ class ConversationRepository {
     // Guard against drift: the migration list must reach the declared version.
     const latest = migrations[migrations.length - 1].version;
     if (latest !== SCHEMA_VERSION) {
-      throw new Error(
-        `Migration list ends at v${latest} but SCHEMA_VERSION is ${SCHEMA_VERSION}.`,
-      );
+      throw new Error(`Migration list ends at v${latest} but SCHEMA_VERSION is ${SCHEMA_VERSION}.`);
     }
 
     const current = this.getSchemaVersion();
@@ -733,10 +743,12 @@ class ConversationRepository {
     };
 
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO conversations (id, title, created_at, updated_at, last_message_at)
         VALUES (@id, @title, @createdAt, @updatedAt, @lastMessageAt)
-      `)
+      `,
+      )
       .run(conversation);
 
     return conversation;
@@ -744,7 +756,8 @@ class ConversationRepository {
 
   listConversations() {
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           id,
           title,
@@ -754,13 +767,15 @@ class ConversationRepository {
           last_message_at AS lastMessageAt
         FROM conversations
         ORDER BY COALESCE(last_message_at, updated_at) DESC
-      `)
+      `,
+      )
       .all();
   }
 
   getConversationSummary(conversationId) {
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           id,
           title,
@@ -770,18 +785,21 @@ class ConversationRepository {
           last_message_at AS lastMessageAt
         FROM conversations
         WHERE id = ?
-      `)
+      `,
+      )
       .get(conversationId);
   }
 
   updateConversationSummary(conversationId, summary) {
     const timestamp = now();
     this.db
-      .prepare(`
+      .prepare(
+        `
         UPDATE conversations
         SET summary = @summary, updated_at = @timestamp
         WHERE id = @conversationId
-      `)
+      `,
+      )
       .run({ conversationId, summary, timestamp });
   }
 
@@ -797,7 +815,9 @@ class ConversationRepository {
     // it (touch updated_at, adopt a more specific category) instead of inserting a
     // near-duplicate. The table is small, so an in-memory scan is fine.
     const existing = this.db
-      .prepare(`SELECT id, fact, category, source_conversation_id AS sourceConversationId, created_at AS createdAt FROM user_memories`)
+      .prepare(
+        `SELECT id, fact, category, source_conversation_id AS sourceConversationId, created_at AS createdAt FROM user_memories`,
+      )
       .all()
       .find((row) => normalizeFact(row.fact) === norm);
 
@@ -806,11 +826,13 @@ class ConversationRepository {
       // Repeating a fact reinforces it rather than duplicating it — recurrence is
       // evidence of importance, which ranking uses to favour established facts.
       this.db
-        .prepare(`
+        .prepare(
+          `
           UPDATE user_memories
           SET updated_at = ?, category = ?, reinforced_count = COALESCE(reinforced_count, 1) + 1
           WHERE id = ?
-        `)
+        `,
+        )
         .run(timestamp, nextCategory, existing.id);
       return {
         id: existing.id,
@@ -833,10 +855,12 @@ class ConversationRepository {
     };
 
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO user_memories (id, fact, category, source_conversation_id, created_at, updated_at)
         VALUES (@id, @fact, @category, @sourceConversationId, @createdAt, @updatedAt)
-      `)
+      `,
+      )
       .run(memory);
 
     return memory;
@@ -847,7 +871,8 @@ class ConversationRepository {
   listUserMemories({ includeSuperseded = false } = {}) {
     const where = includeSuperseded ? '' : 'WHERE superseded_by IS NULL';
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           id,
           fact,
@@ -861,28 +886,33 @@ class ConversationRepository {
         FROM user_memories
         ${where}
         ORDER BY updated_at DESC
-      `)
+      `,
+      )
       .all();
   }
 
   updateUserMemory({ id, fact, category }) {
     const timestamp = now();
     this.db
-      .prepare(`
+      .prepare(
+        `
         UPDATE user_memories
         SET fact = COALESCE(@fact, fact),
             category = COALESCE(@category, category),
             updated_at = @timestamp
         WHERE id = @id
-      `)
+      `,
+      )
       .run({ id, fact: fact ?? null, category: category ?? null, timestamp });
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT id, fact, category, source_conversation_id AS sourceConversationId,
                superseded_by AS supersededBy, COALESCE(reinforced_count, 1) AS reinforcedCount,
                created_at AS createdAt, updated_at AS updatedAt
         FROM user_memories WHERE id = ?
-      `)
+      `,
+      )
       .get(id);
   }
 
@@ -890,7 +920,9 @@ class ConversationRepository {
   // but is excluded from retrieval.
   supersedeUserMemory(oldId, newId) {
     const result = this.db
-      .prepare(`UPDATE user_memories SET superseded_by = ?, superseded_at = ? WHERE id = ? AND superseded_by IS NULL`)
+      .prepare(
+        `UPDATE user_memories SET superseded_by = ?, superseded_at = ? WHERE id = ? AND superseded_by IS NULL`,
+      )
       .run(newId, now(), oldId);
     return result.changes > 0;
   }
@@ -907,12 +939,23 @@ class ConversationRepository {
     const embeddingJson = JSON.stringify(embedding);
 
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO message_embeddings
           (id, message_id, conversation_id, chunk_text, embedding_json, embedding_model, embedding_dim, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(id, messageId, conversationId, chunkText, embeddingJson, embeddingModel, embedding.length, timestamp);
+      `,
+      )
+      .run(
+        id,
+        messageId,
+        conversationId,
+        chunkText,
+        embeddingJson,
+        embeddingModel,
+        embedding.length,
+        timestamp,
+      );
   }
 
   searchVectorMemory(queryEmbedding, limit = 5, currentConversationId = null) {
@@ -928,19 +971,23 @@ class ConversationRepository {
     let rows;
     if (currentConversationId) {
       rows = this.db
-        .prepare(`
+        .prepare(
+          `
           SELECT conversation_id, chunk_text, embedding_json
           FROM message_embeddings
           WHERE conversation_id != ? AND embedding_dim = ?
-        `)
+        `,
+        )
         .all(currentConversationId, dim);
     } else {
       rows = this.db
-        .prepare(`
+        .prepare(
+          `
           SELECT conversation_id, chunk_text, embedding_json
           FROM message_embeddings
           WHERE embedding_dim = ?
-        `)
+        `,
+        )
         .all(dim);
     }
 
@@ -968,7 +1015,8 @@ class ConversationRepository {
 
   listMessages(conversationId) {
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           id,
           conversation_id AS conversationId,
@@ -983,7 +1031,8 @@ class ConversationRepository {
         FROM messages
         WHERE conversation_id = ?
         ORDER BY created_at ASC, rowid ASC
-      `)
+      `,
+      )
       .all(conversationId);
   }
 
@@ -1026,21 +1075,25 @@ class ConversationRepository {
     };
 
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO messages
           (id, conversation_id, role, content, status, expert_id, expert_name, round, turn_kind, created_at)
         VALUES (@id, @conversationId, @role, @content, @status, @expertId, @expertName, @round, @turnKind, @createdAt)
-      `)
+      `,
+      )
       .run(message);
 
     this.db
-      .prepare(`
+      .prepare(
+        `
         UPDATE conversations
         SET
           updated_at = @timestamp,
           last_message_at = @timestamp
         WHERE id = @conversationId
-      `)
+      `,
+      )
       .run({ conversationId, timestamp });
 
     return message;
@@ -1065,22 +1118,22 @@ class ConversationRepository {
 
     const timestamp = now();
     this.db
-      .prepare(`
+      .prepare(
+        `
         UPDATE conversations
         SET
           title = @title,
           updated_at = @timestamp
         WHERE id = @conversationId
-      `)
+      `,
+      )
       .run({ conversationId, title: trimmedTitle, timestamp });
 
     return this.getConversationSummary(conversationId);
   }
 
   deleteConversation(conversationId) {
-    const result = this.db
-      .prepare(`DELETE FROM conversations WHERE id = ?`)
-      .run(conversationId);
+    const result = this.db.prepare(`DELETE FROM conversations WHERE id = ?`).run(conversationId);
 
     return result.changes > 0;
   }
@@ -1094,7 +1147,8 @@ class ConversationRepository {
     const ftsQuery = toFtsQuery(trimmedQuery);
     try {
       return this.db
-        .prepare(`
+        .prepare(
+          `
           WITH ranked_results AS (
             SELECT
               c.id,
@@ -1132,11 +1186,13 @@ class ConversationRepository {
           FROM ranked_results
           GROUP BY id
           ORDER BY MIN(rank), COALESCE(lastMessageAt, updatedAt) DESC
-        `)
+        `,
+        )
         .all({ ftsQuery });
     } catch (_error) {
       return this.db
-        .prepare(`
+        .prepare(
+          `
           SELECT
             c.id,
             c.title,
@@ -1149,7 +1205,8 @@ class ConversationRepository {
           WHERE c.title LIKE @likeQuery OR m.content LIKE @likeQuery
           GROUP BY c.id
           ORDER BY COALESCE(c.last_message_at, c.updated_at) DESC
-        `)
+        `,
+        )
         .all({ likeQuery: `%${trimmedQuery}%` });
     }
   }
@@ -1327,7 +1384,8 @@ class ConversationRepository {
 
   listSpecialistChunksForExport(hubId) {
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           id,
           hub_id AS hubId,
@@ -1346,7 +1404,8 @@ class ConversationRepository {
         FROM specialist_chunks
         WHERE hub_id = ?
         ORDER BY created_at ASC
-      `)
+      `,
+      )
       .all(hubId);
   }
 
@@ -1360,7 +1419,13 @@ class ConversationRepository {
       throw new Error('Import payload is not a valid object.');
     }
 
-    const counts = { conversations: 0, messages: 0, userMemories: 0, specialistHubs: 0, specialistChunks: 0 };
+    const counts = {
+      conversations: 0,
+      messages: 0,
+      userMemories: 0,
+      specialistHubs: 0,
+      specialistChunks: 0,
+    };
 
     const insertConversation = this.db.prepare(`
       INSERT OR IGNORE INTO conversations (id, title, summary, created_at, updated_at, last_message_at)
@@ -1487,11 +1552,13 @@ class ConversationRepository {
 
   setSetting(key, value) {
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO settings (key, value)
         VALUES (?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
-      `)
+      `,
+      )
       .run(key, String(value));
   }
 
@@ -1530,7 +1597,8 @@ class ConversationRepository {
   listSpecialistHubs() {
     const embeddingModel = this.getSetting('embeddingModel');
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           h.id,
           h.name,
@@ -1544,13 +1612,15 @@ class ConversationRepository {
              WHERE sc.hub_id = h.id AND sc.embedding_model = @embeddingModel) AS retrievableChunkCount
         FROM specialist_hubs h
         ORDER BY h.updated_at DESC
-      `)
+      `,
+      )
       .all({ embeddingModel });
   }
 
   getSpecialistHub(id) {
     const hub = this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           id,
           name,
@@ -1561,7 +1631,8 @@ class ConversationRepository {
           updated_at AS updatedAt
         FROM specialist_hubs
         WHERE id = ?
-      `)
+      `,
+      )
       .get(id);
     if (!hub) return null;
     const embeddingModel = this.getSetting('embeddingModel');
@@ -1569,7 +1640,9 @@ class ConversationRepository {
       .prepare(`SELECT COUNT(*) as count FROM specialist_chunks WHERE hub_id = ?`)
       .get(id).count;
     const retrievableChunkCount = this.db
-      .prepare(`SELECT COUNT(*) as count FROM specialist_chunks WHERE hub_id = ? AND embedding_model = ?`)
+      .prepare(
+        `SELECT COUNT(*) as count FROM specialist_chunks WHERE hub_id = ? AND embedding_model = ?`,
+      )
       .get(id, embeddingModel).count;
     return { ...hub, chunkCount, retrievableChunkCount };
   }
@@ -1587,10 +1660,12 @@ class ConversationRepository {
     };
 
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO specialist_hubs (id, name, description, system_prompt, icon, created_at, updated_at)
         VALUES (@id, @name, @description, @systemPrompt, @icon, @createdAt, @updatedAt)
-      `)
+      `,
+      )
       .run(hub);
 
     return { ...hub, chunkCount: 0 };
@@ -1599,7 +1674,8 @@ class ConversationRepository {
   updateSpecialistHub({ id, name, description, systemPrompt, icon }) {
     const timestamp = now();
     this.db
-      .prepare(`
+      .prepare(
+        `
         UPDATE specialist_hubs
         SET
           name = COALESCE(@name, name),
@@ -1608,7 +1684,8 @@ class ConversationRepository {
           icon = COALESCE(@icon, icon),
           updated_at = @timestamp
         WHERE id = @id
-      `)
+      `,
+      )
       .run({ id, name, description, systemPrompt, icon, timestamp });
 
     return this.getSpecialistHub(id);
@@ -1639,21 +1716,33 @@ class ConversationRepository {
     const embeddingJson = JSON.stringify(embedding);
 
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO specialist_chunks
           (id, hub_id, source_title, source_url, chunk_text, embedding_json, embedding_model, embedding_dim,
            location, page, char_start, char_end, source_type, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `)
+      `,
+      )
       .run(
-        id, hubId, sourceTitle, sourceUrl, chunkText, embeddingJson, embeddingModel, embedding.length,
-        location, page, charStart, charEnd, sourceType, timestamp,
+        id,
+        hubId,
+        sourceTitle,
+        sourceUrl,
+        chunkText,
+        embeddingJson,
+        embeddingModel,
+        embedding.length,
+        location,
+        page,
+        charStart,
+        charEnd,
+        sourceType,
+        timestamp,
       );
 
     // Update hub timestamp
-    this.db
-      .prepare(`UPDATE specialist_hubs SET updated_at = ? WHERE id = ?`)
-      .run(timestamp, hubId);
+    this.db.prepare(`UPDATE specialist_hubs SET updated_at = ? WHERE id = ?`).run(timestamp, hubId);
   }
 
   // Chunks that need re-embedding for the given (current) model: everything not
@@ -1661,13 +1750,15 @@ class ConversationRepository {
   // configured model. Returns id + chunk_text so the worker can re-embed in place.
   listChunksForReindex(hubId, embeddingModel) {
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT id, chunk_text AS chunkText
         FROM specialist_chunks
         WHERE hub_id = ?
           AND (embedding_model IS NULL OR embedding_model != ?)
         ORDER BY created_at ASC
-      `)
+      `,
+      )
       .all(hubId, embeddingModel);
   }
 
@@ -1676,11 +1767,13 @@ class ConversationRepository {
   updateChunkEmbedding(chunkId, embedding, embeddingModel) {
     assertValidEmbedding(embedding);
     this.db
-      .prepare(`
+      .prepare(
+        `
         UPDATE specialist_chunks
         SET embedding_json = ?, embedding_model = ?, embedding_dim = ?
         WHERE id = ?
-      `)
+      `,
+      )
       .run(JSON.stringify(embedding), embeddingModel, embedding.length, chunkId);
   }
 
@@ -1694,18 +1787,18 @@ class ConversationRepository {
     if (!action) return null;
     try {
       const at = now();
-      const prev = this.db
-        .prepare(`SELECT hash FROM audit_log ORDER BY seq DESC LIMIT 1`)
-        .get();
+      const prev = this.db.prepare(`SELECT hash FROM audit_log ORDER BY seq DESC LIMIT 1`).get();
       const prevHash = prev ? prev.hash : '';
       const payload = `${prevHash}|${at}|${action}|${detail == null ? '' : String(detail)}`;
       const hash = createHash('sha256').update(payload).digest('hex');
 
       this.db
-        .prepare(`
+        .prepare(
+          `
           INSERT INTO audit_log (at, action, detail, prev_hash, hash)
           VALUES (?, ?, ?, ?, ?)
-        `)
+        `,
+        )
         .run(at, action, detail == null ? null : String(detail), prevHash || null, hash);
 
       return { at, action, detail, hash };
@@ -1718,12 +1811,14 @@ class ConversationRepository {
 
   listAudit({ limit = 200, offset = 0 } = {}) {
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT seq, at, action, detail, prev_hash AS prevHash, hash
         FROM audit_log
         ORDER BY seq DESC
         LIMIT @limit OFFSET @offset
-      `)
+      `,
+      )
       .all({ limit, offset });
   }
 
@@ -1735,7 +1830,9 @@ class ConversationRepository {
   // the log stops verifying, or null when the whole chain is intact.
   verifyAuditChain() {
     const rows = this.db
-      .prepare(`SELECT seq, at, action, detail, prev_hash AS prevHash, hash FROM audit_log ORDER BY seq ASC`)
+      .prepare(
+        `SELECT seq, at, action, detail, prev_hash AS prevHash, hash FROM audit_log ORDER BY seq ASC`,
+      )
       .all();
 
     let expectedPrev = '';
@@ -1774,10 +1871,12 @@ class ConversationRepository {
     };
 
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO notes (id, hub_id, title, body, author, source_conversation_id, created_at, updated_at)
         VALUES (@id, @hubId, @title, @body, @author, @sourceConversationId, @createdAt, @updatedAt)
-      `)
+      `,
+      )
       .run(note);
 
     this.db.prepare(`UPDATE specialist_hubs SET updated_at = ? WHERE id = ?`).run(timestamp, hubId);
@@ -1786,7 +1885,8 @@ class ConversationRepository {
 
   listNotes(hubId) {
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           id, hub_id AS hubId, title, body, author,
           source_conversation_id AS sourceConversationId,
@@ -1794,32 +1894,37 @@ class ConversationRepository {
         FROM notes
         WHERE hub_id = ?
         ORDER BY updated_at DESC
-      `)
+      `,
+      )
       .all(hubId);
   }
 
   getNote(id) {
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           id, hub_id AS hubId, title, body, author,
           source_conversation_id AS sourceConversationId,
           created_at AS createdAt, updated_at AS updatedAt
         FROM notes WHERE id = ?
-      `)
+      `,
+      )
       .get(id);
   }
 
   updateNote({ id, title, body }) {
     const timestamp = now();
     this.db
-      .prepare(`
+      .prepare(
+        `
         UPDATE notes
         SET title = COALESCE(@title, title),
             body = COALESCE(@body, body),
             updated_at = @timestamp
         WHERE id = @id
-      `)
+      `,
+      )
       .run({ id, title: title ?? null, body: body ?? null, timestamp });
     return this.getNote(id);
   }
@@ -1854,7 +1959,8 @@ class ConversationRepository {
 
     const stride = Math.max(1, Math.ceil(total / maxChunks));
     const chunks = this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT chunk_text AS chunkText, source_title AS sourceTitle, source_url AS sourceUrl,
                location, page, source_type AS sourceType
         FROM (
@@ -1863,7 +1969,8 @@ class ConversationRepository {
         )
         WHERE (rn - 1) % @stride = 0
         LIMIT @maxChunks
-      `)
+      `,
+      )
       .all(hubId, { stride, maxChunks });
 
     return { total, chunks };
@@ -1883,7 +1990,8 @@ class ConversationRepository {
 
     try {
       return this.db
-        .prepare(`
+        .prepare(
+          `
           SELECT
             c.id AS chunkId,
             c.hub_id AS hubId,
@@ -1902,7 +2010,8 @@ class ConversationRepository {
             AND specialist_chunk_search.hub_id = @hubId
           ORDER BY rank
           LIMIT @limit
-        `)
+        `,
+        )
         .all({ ftsQuery, hubId, limit });
     } catch (_error) {
       // A malformed FTS expression must never break retrieval; vector search alone
@@ -1925,18 +2034,22 @@ class ConversationRepository {
                      location, page, char_start, char_end, source_type`;
     const rows = embeddingModel
       ? this.db
-          .prepare(`
+          .prepare(
+            `
             SELECT ${columns}
             FROM specialist_chunks
             WHERE hub_id = ? AND embedding_dim = ? AND embedding_model = ?
-          `)
+          `,
+          )
           .all(hubId, dim, embeddingModel)
       : this.db
-          .prepare(`
+          .prepare(
+            `
             SELECT ${columns}
             FROM specialist_chunks
             WHERE hub_id = ? AND embedding_dim = ?
-          `)
+          `,
+          )
           .all(hubId, dim);
 
     const scored = rows
@@ -2001,5 +2114,3 @@ module.exports = {
   SCHEMA_VERSION,
   createAutoTitle,
 };
-
-

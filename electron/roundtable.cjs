@@ -84,16 +84,16 @@ function isPass(text) {
   const trimmed = text.trim();
   if (!trimmed) return true;
   // Tolerate a model wrapping the token in punctuation or a short sentence.
-  return new RegExp(`^\\W*${PASS_TOKEN}\\W*$`, 'i').test(trimmed) ||
-    (trimmed.length < 120 && new RegExp(PASS_TOKEN, 'i').test(trimmed));
+  return (
+    new RegExp(`^\\W*${PASS_TOKEN}\\W*$`, 'i').test(trimmed) ||
+    (trimmed.length < 120 && new RegExp(PASS_TOKEN, 'i').test(trimmed))
+  );
 }
 
 // Renders the discussion so far for the next speaker.
 function formatTranscript(turns) {
   if (turns.length === 0) return '';
-  return turns
-    .map((t) => `[Round ${t.round} — ${t.expertName}]: ${t.content}`)
-    .join('\n\n');
+  return turns.map((t) => `[Round ${t.round} — ${t.expertName}]: ${t.content}`).join('\n\n');
 }
 
 class RoundtableOrchestrator {
@@ -180,7 +180,14 @@ class RoundtableOrchestrator {
           .join('\n');
 
         const turnId = `${round}:${hub.id}`;
-        onTurnStart({ turnId, round, totalRounds, expertId: hub.id, expertName: hub.name, kind: 'expert' });
+        onTurnStart({
+          turnId,
+          round,
+          totalRounds,
+          expertId: hub.id,
+          expertName: hub.name,
+          kind: 'expert',
+        });
 
         let text = '';
         try {
@@ -198,8 +205,14 @@ class RoundtableOrchestrator {
           if (error && error.name === 'AbortError') break;
           // One Expert failing must not sink the discussion.
           onTurnComplete({
-            turnId, round, expertId: hub.id, expertName: hub.name, kind: 'expert',
-            content: `(${hub.name} could not respond: ${error.message})`, passed: true, grounding: null,
+            turnId,
+            round,
+            expertId: hub.id,
+            expertName: hub.name,
+            kind: 'expert',
+            content: `(${hub.name} could not respond: ${error.message})`,
+            passed: true,
+            grounding: null,
           });
           continue;
         }
@@ -210,19 +223,30 @@ class RoundtableOrchestrator {
         const redundant = round > 1 && isRedundant(text, turns);
         if (isPass(text) || redundant) {
           onTurnComplete({
-            turnId, round, expertId: hub.id, expertName: hub.name, kind: 'expert',
+            turnId,
+            round,
+            expertId: hub.id,
+            expertName: hub.name,
+            kind: 'expert',
             content: redundant
               ? `${hub.name} had nothing to add beyond what was already said.`
               : `${hub.name} had nothing further to add.`,
-            passed: true, grounding: null,
+            passed: true,
+            grounding: null,
           });
           continue;
         }
 
         spokeThisRound += 1;
         const turn = {
-          turnId, round, expertId: hub.id, expertName: hub.name, kind: 'expert',
-          content: text, passed: false, grounding: context.specialistGrounding || null,
+          turnId,
+          round,
+          expertId: hub.id,
+          expertName: hub.name,
+          kind: 'expert',
+          content: text,
+          passed: false,
+          grounding: context.specialistGrounding || null,
         };
         turns.push(turn);
         onTurnComplete(turn);
@@ -241,14 +265,30 @@ class RoundtableOrchestrator {
 
     // Moderator synthesis — the answer the user actually reads.
     const moderator = await this.runModerator({
-      conversationId, content, hubs, turns, model: moderatorModel || model,
-      signal, onTurnStart, onTurnDelta, stoppedEarly,
+      conversationId,
+      content,
+      hubs,
+      turns,
+      model: moderatorModel || model,
+      signal,
+      onTurnStart,
+      onTurnDelta,
+      stoppedEarly,
     });
 
     return { turns, moderator, aborted: false, stoppedEarly };
   }
 
-  async runModerator({ content, hubs, turns, model, signal, onTurnStart, onTurnDelta, stoppedEarly }) {
+  async runModerator({
+    content,
+    hubs,
+    turns,
+    model,
+    signal,
+    onTurnStart,
+    onTurnDelta,
+    stoppedEarly,
+  }) {
     const turnId = 'moderator';
     onTurnStart({ turnId, kind: 'moderator', expertName: 'Moderator' });
 
@@ -285,7 +325,9 @@ class RoundtableOrchestrator {
     } catch (error) {
       if (error && error.name === 'AbortError') return null;
       return {
-        turnId, kind: 'moderator', expertName: 'Moderator',
+        turnId,
+        kind: 'moderator',
+        expertName: 'Moderator',
         content: `The moderator could not summarize the discussion: ${error.message}`,
       };
     }

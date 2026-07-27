@@ -1,7 +1,41 @@
 const STOPWORDS = new Set([
-  'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'to', 'of',
-  'in', 'on', 'for', 'with', 'as', 'at', 'by', 'it', 'this', 'that', 'i', 'you', 'my',
-  'me', 'do', 'does', 'how', 'what', 'why', 'when', 'can', 'should', 'would', 'about',
+  'the',
+  'a',
+  'an',
+  'and',
+  'or',
+  'but',
+  'is',
+  'are',
+  'was',
+  'were',
+  'be',
+  'to',
+  'of',
+  'in',
+  'on',
+  'for',
+  'with',
+  'as',
+  'at',
+  'by',
+  'it',
+  'this',
+  'that',
+  'i',
+  'you',
+  'my',
+  'me',
+  'do',
+  'does',
+  'how',
+  'what',
+  'why',
+  'when',
+  'can',
+  'should',
+  'would',
+  'about',
 ]);
 
 function tokenize(text) {
@@ -115,7 +149,9 @@ class MemoryManager {
             const chunkLines = relevantChunks.map(
               (c) => `- Historical Context: "${c.chunkText.slice(0, 300)}"`,
             );
-            contextSections.push(`### Relevant Past Conversation History:\n${chunkLines.join('\n')}`);
+            contextSections.push(
+              `### Relevant Past Conversation History:\n${chunkLines.join('\n')}`,
+            );
           }
         }
       }
@@ -128,7 +164,9 @@ class MemoryManager {
       try {
         const summaryObj = this.repository.getConversationSummary(currentConversationId);
         if (summaryObj && summaryObj.summary) {
-          contextSections.push(`### Executive Summary of Earlier Conversation:\n${summaryObj.summary}`);
+          contextSections.push(
+            `### Executive Summary of Earlier Conversation:\n${summaryObj.summary}`,
+          );
         }
       } catch (_e) {
         // Summary fallback
@@ -268,9 +306,7 @@ class MemoryManager {
 
     let candidates = [];
     try {
-      const others = this.repository
-        .listUserMemories()
-        .filter((m) => m.id !== newMemory.id);
+      const others = this.repository.listUserMemories().filter((m) => m.id !== newMemory.id);
       candidates = findSupersessionCandidates(newMemory.fact, others);
     } catch (_e) {
       return [];
@@ -287,7 +323,10 @@ class MemoryManager {
             content:
               'Decide which older statements are now OUT OF DATE because the new statement replaces them (the same attribute changed). Do NOT list statements that merely relate to the same topic but can both be true. Output ONLY a JSON array of the numbers to retire, e.g. [1]. If none, output [].',
           },
-          { role: 'user', content: `New statement: "${newMemory.fact}"\n\nOlder statements:\n${numbered}` },
+          {
+            role: 'user',
+            content: `New statement: "${newMemory.fact}"\n\nOlder statements:\n${numbered}`,
+          },
         ],
       });
 

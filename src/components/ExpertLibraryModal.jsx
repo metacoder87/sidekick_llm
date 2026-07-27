@@ -184,9 +184,9 @@ export default function ExpertLibraryModal({ isOpen, onClose, sidekick, onInstal
         </div>
 
         <p className="modal-description">
-          Adding an Expert creates it in your library and runs its built-in research brief
-          on your own machine — the knowledge is fetched and indexed locally, never shipped
-          with the app. You can retrain, rename or extend any of them afterwards.
+          Adding an Expert creates it in your library and runs its built-in research brief on your
+          own machine — the knowledge is fetched and indexed locally, never shipped with the app.
+          You can retrain, rename or extend any of them afterwards.
         </p>
       </div>
     </div>

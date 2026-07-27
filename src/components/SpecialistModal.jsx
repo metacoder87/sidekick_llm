@@ -22,13 +22,7 @@ function describeResult(res) {
   return res.message || 'Done.';
 }
 
-export default function SpecialistModal({
-  isOpen,
-  onClose,
-  sidekick,
-  hubToEdit,
-  onHubSaved,
-}) {
+export default function SpecialistModal({ isOpen, onClose, sidekick, hubToEdit, onHubSaved }) {
   const isEditing = !!hubToEdit;
   const [name, setName] = useState(hubToEdit?.name || '');
   const [description, setDescription] = useState(hubToEdit?.description || '');
@@ -314,15 +308,19 @@ export default function SpecialistModal({
           <div className="specialist-vault-section">
             <h3>Knowledge Vault Training & Ingestion</h3>
             <p className="modal-description">
-              Provide a research topic or upload documents (PDF, TXT, MD) to train this AI Expert's RAG knowledge vault. {isEditing && stats.chunkCount ? `(${stats.retrievableChunkCount} of ${stats.chunkCount} chunks retrievable with the current embedding model)` : ''}
+              Provide a research topic or upload documents (PDF, TXT, MD) to train this AI Expert's
+              RAG knowledge vault.{' '}
+              {isEditing && stats.chunkCount
+                ? `(${stats.retrievableChunkCount} of ${stats.chunkCount} chunks retrievable with the current embedding model)`
+                : ''}
             </p>
 
             {isEditing && staleCount > 0 ? (
               <div className="vault-warning">
                 <p>
-                  ⚠️ {staleCount} chunk{staleCount === 1 ? '' : 's'} were embedded with a
-                  different (or no) model and are not currently retrievable. Re-index to
-                  repair them — no re-upload needed.
+                  ⚠️ {staleCount} chunk{staleCount === 1 ? '' : 's'} were embedded with a different
+                  (or no) model and are not currently retrievable. Re-index to repair them — no
+                  re-upload needed.
                 </p>
                 <button
                   type="button"

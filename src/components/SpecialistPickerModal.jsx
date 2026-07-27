@@ -92,7 +92,9 @@ export default function SpecialistPickerModal({
         </div>
 
         <p className="modal-description">
-          Select one or more AI Specialists to consult. Each selected expert's dedicated vault is searched and its domain instructions applied — build a whole panel to consult at once. Click to toggle; changes apply immediately.
+          Select one or more AI Specialists to consult. Each selected expert's dedicated vault is
+          searched and its domain instructions applied — build a whole panel to consult at once.
+          Click to toggle; changes apply immediately.
         </p>
 
         <div className="specialist-grid">
@@ -119,7 +121,8 @@ export default function SpecialistPickerModal({
                 <strong>{hub.name}</strong>
                 <small>
                   {hub.chunkCount || 0} chunks
-                  {typeof hub.retrievableChunkCount === 'number' && hub.retrievableChunkCount < hub.chunkCount
+                  {typeof hub.retrievableChunkCount === 'number' &&
+                  hub.retrievableChunkCount < hub.chunkCount
                     ? ` · ⚠️ ${hub.retrievableChunkCount} retrievable`
                     : ''}
                 </small>
@@ -183,7 +186,8 @@ export default function SpecialistPickerModal({
             📦 Install from file
           </button>
           <button type="button" className="primary-button" onClick={onClose}>
-            Done{activeSpecialistIds.length > 0 ? ` (${activeSpecialistIds.length} consulting)` : ''}
+            Done
+            {activeSpecialistIds.length > 0 ? ` (${activeSpecialistIds.length} consulting)` : ''}
           </button>
         </div>
       </div>

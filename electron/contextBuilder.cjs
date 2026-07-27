@@ -7,7 +7,12 @@
 // isolation rather than buried in a 370-line request handler (ROADMAP Stage 2).
 const { performWebSearch } = require('./search/searchService.cjs');
 const { scrapeTopResults } = require('./search/scraper.cjs');
-const { selectTopMatches, contributionByExpert, fuseHybrid, suggestExperts } = require('./retrieval.cjs');
+const {
+  selectTopMatches,
+  contributionByExpert,
+  fuseHybrid,
+  suggestExperts,
+} = require('./retrieval.cjs');
 const { classifyQuery, planRetrievalQueries, unionMatches } = require('./queryPlanner.cjs');
 
 const BASE_INSTRUCTION =
@@ -146,11 +151,15 @@ async function buildChatContext({
         // best score, then globally reranked across vaults below.
         const perQuery = [];
         for (const { query, embedding } of embeddings) {
-          const vectorMatches = repository.searchSpecialistVectorMemory(hub.id, embedding, 8, embeddingModel) || [];
+          const vectorMatches =
+            repository.searchSpecialistVectorMemory(hub.id, embedding, 8, embeddingModel) || [];
           const keywordMatches = repository.searchSpecialistKeyword(hub.id, query, 8) || [];
           perQuery.push(fuseHybrid(vectorMatches, keywordMatches, 8));
         }
-        groups.push({ expert: { id: hub.id, name: hub.name }, matches: unionMatches(perQuery).slice(0, 8) });
+        groups.push({
+          expert: { id: hub.id, name: hub.name },
+          matches: unionMatches(perQuery).slice(0, 8),
+        });
       }
 
       // Aggregation questions need a survey of the whole vault, not top-k. Run it
@@ -190,7 +199,9 @@ async function buildChatContext({
             ? `You are operating as the AI Specialist "${hubs[0].name}".`
             : `You are consulting a panel of ${hubs.length} AI Specialists: ${hubs
                 .map((h) => h.name)
-                .join(', ')}. Integrate their expertise; when experts would disagree, present the perspectives rather than flattening them.`;
+                .join(
+                  ', ',
+                )}. Integrate their expertise; when experts would disagree, present the perspectives rather than flattening them.`;
 
         // A whole-vault survey (aggregation questions) is grounded evidence too —
         // it is derived from the corpus, so label it as such.
@@ -208,12 +219,20 @@ async function buildChatContext({
         specialistContext = `\n<specialist_panel>\n${panelIntro}\nWhen you use an expert's vault knowledge, cite the expert and source. Do not fabricate sources.${contradictionDirective}\n\n${roleBlocks.join('\n')}\n${knowledgeSection}\n${surveySection}</specialist_panel>\n`;
 
         specialistGrounding = {
-          experts: hubs.map((h) => ({ id: h.id, name: h.name, matches: contribution.get(h.id) || 0 })),
+          experts: hubs.map((h) => ({
+            id: h.id,
+            name: h.name,
+            matches: contribution.get(h.id) || 0,
+          })),
           grounded: topChunks.length > 0 || Boolean(aggregateSurvey),
           matches: topChunks.length,
           strategy: classification.type,
           survey: aggregateSurvey
-            ? { expertName: aggregateSurvey.expertName, sampled: aggregateSurvey.sampled, total: aggregateSurvey.total }
+            ? {
+                expertName: aggregateSurvey.expertName,
+                sampled: aggregateSurvey.sampled,
+                total: aggregateSurvey.total,
+              }
             : null,
           // The exact chunks that were put in front of the model, with provenance.
           // Source cards are rendered FROM THIS — never parsed out of the model's
@@ -242,7 +261,9 @@ async function buildChatContext({
   let suggestedExperts = [];
   try {
     const allHubs = repository.listSpecialistHubs() || [];
-    const notConsulted = allHubs.filter((h) => !activeSpecialistIds.includes(h.id) && h.retrievableChunkCount > 0);
+    const notConsulted = allHubs.filter(
+      (h) => !activeSpecialistIds.includes(h.id) && h.retrievableChunkCount > 0,
+    );
     if (notConsulted.length > 0) {
       const probe = await ollama.generateEmbedding({ model: embeddingModel, input: content });
       if (probe && probe.length > 0) {
@@ -256,7 +277,6 @@ async function buildChatContext({
   } catch (suggestErr) {
     console.error('Expert suggestion error:', suggestErr.message);
   }
-
 
   // Build the system message with profile, specialist panel, memory & search context.
   const systemContent = [

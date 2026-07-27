@@ -5,14 +5,27 @@ const { extractMainText } = require('../electron/search/scraper.cjs');
 const { rankMemoriesByRelevance } = require('../electron/memory/memoryManager.cjs');
 const { selectTopMatches, contributionByExpert, fuseHybrid } = require('../electron/retrieval.cjs');
 
-const { classifyQuery, planRetrievalQueries, unionMatches } = require('../electron/queryPlanner.cjs');
+const {
+  classifyQuery,
+  planRetrievalQueries,
+  unionMatches,
+} = require('../electron/queryPlanner.cjs');
 
 test('classifyQuery picks the retrieval strategy a question actually needs', () => {
   assert.equal(classifyQuery('What is the liability cap?').type, 'simple');
-  assert.equal(classifyQuery('What does this Expert say about indemnity overall?').type, 'aggregate');
+  assert.equal(
+    classifyQuery('What does this Expert say about indemnity overall?').type,
+    'aggregate',
+  );
   assert.equal(classifyQuery('Summarize the key takeaways').type, 'aggregate');
-  assert.equal(classifyQuery('How does my lab result relate to the medication prescribed?').type, 'multihop');
-  assert.equal(classifyQuery('Is there anything here that contradicts what my doctor said?').type, 'contradiction');
+  assert.equal(
+    classifyQuery('How does my lab result relate to the medication prescribed?').type,
+    'multihop',
+  );
+  assert.equal(
+    classifyQuery('Is there anything here that contradicts what my doctor said?').type,
+    'contradiction',
+  );
   // Flags are independent of the dominant type.
   assert.equal(classifyQuery('Is that correct?').contradiction, true);
 
@@ -37,7 +50,8 @@ test('planRetrievalQueries adds opposing probes for contradiction questions', as
 test('planRetrievalQueries decomposes multi-hop questions via the background model', async () => {
   const query = 'Does my vitamin D level relate to the statin I was prescribed?';
   const ollama = {
-    generateChatSync: async () => '["What do the sources say about vitamin D levels?", "What do the sources say about statin interactions?"]',
+    generateChatSync: async () =>
+      '["What do the sources say about vitamin D levels?", "What do the sources say about statin interactions?"]',
   };
   const queries = await planRetrievalQueries({
     query,
@@ -53,19 +67,38 @@ test('planRetrievalQueries decomposes multi-hop questions via the background mod
 
 test('planRetrievalQueries degrades to the original query when the model fails', async () => {
   const query = 'How do A and B relate together?';
-  const ollama = { generateChatSync: async () => { throw new Error('model offline'); } };
-  const queries = await planRetrievalQueries({ query, classification: classifyQuery(query), ollama, model: 'x' });
+  const ollama = {
+    generateChatSync: async () => {
+      throw new Error('model offline');
+    },
+  };
+  const queries = await planRetrievalQueries({
+    query,
+    classification: classifyQuery(query),
+    ollama,
+    model: 'x',
+  });
   assert.deepEqual(queries, [query]);
 });
 
 test('unionMatches merges per-query results keeping each chunk at its best score', () => {
   const merged = unionMatches([
-    [{ chunkId: 'a', score: 0.5 }, { chunkId: 'b', score: 0.9 }],
-    [{ chunkId: 'a', score: 0.8 }, { chunkId: 'c', score: 0.4 }],
+    [
+      { chunkId: 'a', score: 0.5 },
+      { chunkId: 'b', score: 0.9 },
+    ],
+    [
+      { chunkId: 'a', score: 0.8 },
+      { chunkId: 'c', score: 0.4 },
+    ],
   ]);
   assert.equal(merged.length, 3);
   assert.equal(merged[0].chunkId, 'b');
-  assert.equal(merged.find((m) => m.chunkId === 'a').score, 0.8, 'keeps the best score seen for a chunk');
+  assert.equal(
+    merged.find((m) => m.chunkId === 'a').score,
+    0.8,
+    'keeps the best score seen for a chunk',
+  );
 });
 
 test('fuseHybrid (RRF) rewards chunks ranked well in BOTH vector and keyword lists', () => {
@@ -73,7 +106,7 @@ test('fuseHybrid (RRF) rewards chunks ranked well in BOTH vector and keyword lis
   // RRF should promote `both`, because agreement across independent rankings is
   // stronger evidence than a single list's top hit.
   const vector = [
-    { chunkId: 'vecOnly', chunkText: 'semantically close but wrong', score: 0.80 },
+    { chunkId: 'vecOnly', chunkText: 'semantically close but wrong', score: 0.8 },
     { chunkId: 'both', chunkText: 'the right passage', score: 0.72 },
   ];
   const keyword = [
@@ -120,18 +153,28 @@ test('buildTextFragment produces a start,end fragment for long quotes and a plai
   assert.equal(buildTextFragment('liability is limited'), '#:~:text=liability%20is%20limited');
 
   // Long quote → start,end range form (more reliable than one huge match).
-  const long = 'Clause seven point two limits the total aggregate liability of the vendor to the fees actually paid during the prior twelve month period';
+  const long =
+    'Clause seven point two limits the total aggregate liability of the vendor to the fees actually paid during the prior twelve month period';
   const frag = buildTextFragment(long);
   assert.ok(frag.startsWith('#:~:text='));
   assert.ok(frag.includes(','), 'long quotes should use the textStart,textEnd form');
 
   // Web source → URL + fragment, flagged precise.
-  const web = buildSourceLink({ sourceUrl: 'https://example.com/doc', quote: long, location: 'chars 0–120' });
+  const web = buildSourceLink({
+    sourceUrl: 'https://example.com/doc',
+    quote: long,
+    location: 'chars 0–120',
+  });
   assert.ok(web.href.startsWith('https://example.com/doc#:~:text='));
   assert.equal(web.precise, true);
 
   // Local PDF → page anchor.
-  const pdf = buildSourceLink({ sourceUrl: 'file:///C:/docs/contract.pdf', quote: 'x', page: 12, location: 'p. 12' });
+  const pdf = buildSourceLink({
+    sourceUrl: 'file:///C:/docs/contract.pdf',
+    quote: 'x',
+    page: 12,
+    location: 'p. 12',
+  });
   assert.equal(pdf.href, 'file:///C:/docs/contract.pdf#page=12');
   assert.equal(pdf.precise, true);
   assert.equal(pdf.label, 'p. 12');
@@ -147,7 +190,15 @@ test('selectTopMatches carries citation provenance through to the selected set',
     {
       expert: { id: 'a', name: 'Legal Expert' },
       matches: [
-        { sourceTitle: 'contract.pdf', sourceUrl: 'file:///c/contract.pdf', chunkText: 'Clause 7.2 …', score: 0.9, location: 'p. 12', page: 12, sourceType: 'pdf' },
+        {
+          sourceTitle: 'contract.pdf',
+          sourceUrl: 'file:///c/contract.pdf',
+          chunkText: 'Clause 7.2 …',
+          score: 0.9,
+          location: 'p. 12',
+          page: 12,
+          sourceType: 'pdf',
+        },
       ],
     },
   ];
@@ -163,7 +214,7 @@ test('selectTopMatches globally ranks chunks across vaults, so the best win rega
     {
       expert: { id: 'a', name: 'Expert A' },
       matches: [
-        { sourceTitle: 'a1', chunkText: 'weak a', score: 0.50 },
+        { sourceTitle: 'a1', chunkText: 'weak a', score: 0.5 },
         { sourceTitle: 'a2', chunkText: 'mid a', score: 0.72 },
       ],
     },
@@ -171,7 +222,7 @@ test('selectTopMatches globally ranks chunks across vaults, so the best win rega
       expert: { id: 'b', name: 'Expert B' },
       matches: [
         { sourceTitle: 'b1', chunkText: 'best b', score: 0.91 },
-        { sourceTitle: 'b2', chunkText: 'good b', score: 0.80 },
+        { sourceTitle: 'b2', chunkText: 'good b', score: 0.8 },
       ],
     },
   ];
@@ -179,7 +230,10 @@ test('selectTopMatches globally ranks chunks across vaults, so the best win rega
   const top = selectTopMatches(groups, 3);
   assert.equal(top.length, 3);
   // Highest score first, across experts.
-  assert.deepEqual(top.map((t) => t.sourceTitle), ['b1', 'b2', 'a2']);
+  assert.deepEqual(
+    top.map((t) => t.sourceTitle),
+    ['b1', 'b2', 'a2'],
+  );
   // The weakest chunk (a1, 0.50) was dropped even though its expert was consulted.
   assert.ok(!top.some((t) => t.sourceTitle === 'a1'));
 
@@ -190,21 +244,40 @@ test('selectTopMatches globally ranks chunks across vaults, so the best win rega
 
 test('selectTopMatches handles empty groups and missing scores', () => {
   assert.deepEqual(selectTopMatches([], 5), []);
-  const top = selectTopMatches([{ expert: { id: 'x', name: 'X' }, matches: [{ sourceTitle: 's', chunkText: 'c' }] }], 5);
+  const top = selectTopMatches(
+    [{ expert: { id: 'x', name: 'X' }, matches: [{ sourceTitle: 's', chunkText: 'c' }] }],
+    5,
+  );
   assert.equal(top.length, 1);
   assert.equal(top[0].score, 0);
 });
 
 test('rankMemoriesByRelevance surfaces query-relevant facts over merely-recent ones', () => {
   const memories = [
-    { fact: 'User deploys with Docker and Kubernetes', category: 'stack', updatedAt: '2026-07-24T10:00:00Z' },
-    { fact: 'User prefers React with Vite for frontend work', category: 'stack', updatedAt: '2026-07-24T09:00:00Z' },
-    { fact: 'User lives in the Pacific timezone', category: 'personal', updatedAt: '2026-07-24T11:00:00Z' },
+    {
+      fact: 'User deploys with Docker and Kubernetes',
+      category: 'stack',
+      updatedAt: '2026-07-24T10:00:00Z',
+    },
+    {
+      fact: 'User prefers React with Vite for frontend work',
+      category: 'stack',
+      updatedAt: '2026-07-24T09:00:00Z',
+    },
+    {
+      fact: 'User lives in the Pacific timezone',
+      category: 'personal',
+      updatedAt: '2026-07-24T11:00:00Z',
+    },
   ];
 
   // With a single slot, the relevant fact must be chosen over the most-recent one
   // (the timezone fact is newest but irrelevant).
-  const top = rankMemoriesByRelevance(memories, 'How do I optimize my React component rendering?', 1);
+  const top = rankMemoriesByRelevance(
+    memories,
+    'How do I optimize my React component rendering?',
+    1,
+  );
   assert.equal(top.length, 1);
   assert.equal(top[0].fact, 'User prefers React with Vite for frontend work');
 });
@@ -217,7 +290,10 @@ test('findSupersessionCandidates proposes same-topic facts, not identical or unr
     { id: '3', fact: 'User switched to Linux as their operating system' },
   ];
 
-  const candidates = findSupersessionCandidates('User switched to Linux as their operating system', memories);
+  const candidates = findSupersessionCandidates(
+    'User switched to Linux as their operating system',
+    memories,
+  );
   const ids = candidates.map((c) => c.id);
 
   assert.ok(ids.includes('1'), 'the same-topic older fact is a candidate');
@@ -229,7 +305,12 @@ test('rankMemoriesByRelevance favours reinforced facts and decays stale unreinfo
   const old = new Date(Date.now() - 400 * 86400000).toISOString(); // >180 days
   const memories = [
     { fact: 'User deploys with Docker', category: 'stack', updatedAt: old, reinforcedCount: 1 },
-    { fact: 'User deploys with Docker Swarm', category: 'stack', updatedAt: old, reinforcedCount: 5 },
+    {
+      fact: 'User deploys with Docker Swarm',
+      category: 'stack',
+      updatedAt: old,
+      reinforcedCount: 5,
+    },
   ];
   // Equal lexical relevance → the repeatedly-stated fact wins the tiebreak.
   const ranked = rankMemoriesByRelevance(memories, 'deploys', 2);

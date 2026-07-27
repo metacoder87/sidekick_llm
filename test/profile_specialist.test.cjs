@@ -111,7 +111,11 @@ test('notes are embedded into the vault, re-indexed on edit, and removed on dele
   const hub = repository.createSpecialistHub({ name: 'Notes Hub' });
 
   // Create → indexed as retrievable vault knowledge, tagged as a note.
-  const note = repository.createNote({ hubId: hub.id, title: 'Key finding', body: 'Consistency matters more than timing for supplementation.' });
+  const note = repository.createNote({
+    hubId: hub.id,
+    title: 'Key finding',
+    body: 'Consistency matters more than timing for supplementation.',
+  });
   const created = await worker.indexNote({ note, embeddingModel: model });
   assert.equal(created.success, true);
   assert.ok(created.chunksCount >= 1);
@@ -148,7 +152,14 @@ test('the Expert Library catalog is complete and its seed briefs decompose into 
   for (const template of catalog.templates) {
     assert.ok(template.id && !ids.has(template.id), `duplicate or missing id: ${template.id}`);
     ids.add(template.id);
-    for (const field of ['name', 'category', 'description', 'systemPrompt', 'seedResearch', 'icon']) {
+    for (const field of [
+      'name',
+      'category',
+      'description',
+      'systemPrompt',
+      'seedResearch',
+      'icon',
+    ]) {
       assert.ok(template[field], `${template.id} is missing ${field}`);
     }
 
@@ -164,7 +175,15 @@ test('the Expert Library catalog is complete and its seed briefs decompose into 
 
   // The high-stakes domains must be represented, since they are the point.
   const categories = new Set(catalog.templates.map((t) => t.category));
-  for (const expected of ['Coding', 'Business', 'Law', 'Medicine', 'Finance', 'Research', 'Writing']) {
+  for (const expected of [
+    'Coding',
+    'Business',
+    'Law',
+    'Medicine',
+    'Finance',
+    'Research',
+    'Writing',
+  ]) {
     assert.ok(categories.has(expected), `catalog is missing the ${expected} category`);
   }
 });
@@ -174,14 +193,27 @@ test('an Expert Pack round-trips persona, vault and notes into a NEW installable
   const model = repository.getSetting('embeddingModel');
 
   const hub = repository.createSpecialistHub({
-    name: 'Legal Expert', description: 'Contracts', systemPrompt: 'Read literally.', icon: 'scale',
+    name: 'Legal Expert',
+    description: 'Contracts',
+    systemPrompt: 'Read literally.',
+    icon: 'scale',
   });
   repository.saveSpecialistChunk({
-    hubId: hub.id, sourceTitle: 'agreement.pdf', sourceUrl: 'file:///c/a.pdf',
-    chunkText: 'Clause 7.2 caps liability.', embedding: [1, 0, 0], embeddingModel: model,
-    location: 'p. 2', page: 2, sourceType: 'pdf',
+    hubId: hub.id,
+    sourceTitle: 'agreement.pdf',
+    sourceUrl: 'file:///c/a.pdf',
+    chunkText: 'Clause 7.2 caps liability.',
+    embedding: [1, 0, 0],
+    embeddingModel: model,
+    location: 'p. 2',
+    page: 2,
+    sourceType: 'pdf',
   });
-  repository.createNote({ hubId: hub.id, title: 'Key point', body: 'Liability cap is the negotiation lever.' });
+  repository.createNote({
+    hubId: hub.id,
+    title: 'Key point',
+    body: 'Liability cap is the negotiation lever.',
+  });
 
   const pack = repository.exportExpertPack(hub.id);
   assert.equal(pack.kind, 'expert-pack');
@@ -217,7 +249,10 @@ test('importing a pack built with a different embedding model reports it as not 
   const repository = new ConversationRepository(':memory:');
   const hub = repository.createSpecialistHub({ name: 'Foreign Expert' });
   repository.saveSpecialistChunk({
-    hubId: hub.id, sourceTitle: 's', chunkText: 'text', embedding: [1, 0, 0, 0],
+    hubId: hub.id,
+    sourceTitle: 's',
+    chunkText: 'text',
+    embedding: [1, 0, 0, 0],
     embeddingModel: 'some-other-embedder',
   });
 
@@ -236,7 +271,10 @@ test('importing a pack built with a different embedding model reports it as not 
 
 test('importExpertPack rejects a file that is not an Expert Pack', () => {
   const repository = new ConversationRepository(':memory:');
-  assert.throws(() => repository.importExpertPack({ app: 'something-else' }), /not a Sidekick Expert Pack/i);
+  assert.throws(
+    () => repository.importExpertPack({ app: 'something-else' }),
+    /not a Sidekick Expert Pack/i,
+  );
   assert.throws(() => repository.importExpertPack(null), /not a Sidekick Expert Pack/i);
   repository.close();
 });
@@ -247,8 +285,20 @@ test('specialist hub reports retrievable vs total chunk counts by current embedd
   const hub = repository.createSpecialistHub({ name: 'Counts' });
 
   // One chunk from the current model, one from a stale/previous model.
-  repository.saveSpecialistChunk({ hubId: hub.id, sourceTitle: 'a', chunkText: 'current', embedding: [1, 2, 3], embeddingModel: model });
-  repository.saveSpecialistChunk({ hubId: hub.id, sourceTitle: 'b', chunkText: 'stale', embedding: [1, 2, 3, 4], embeddingModel: 'old-model' });
+  repository.saveSpecialistChunk({
+    hubId: hub.id,
+    sourceTitle: 'a',
+    chunkText: 'current',
+    embedding: [1, 2, 3],
+    embeddingModel: model,
+  });
+  repository.saveSpecialistChunk({
+    hubId: hub.id,
+    sourceTitle: 'b',
+    chunkText: 'stale',
+    embedding: [1, 2, 3, 4],
+    embeddingModel: 'old-model',
+  });
 
   const got = repository.getSpecialistHub(hub.id);
   assert.equal(got.chunkCount, 2);
@@ -268,11 +318,19 @@ test('reindexHub re-embeds stale/legacy chunks so they become retrievable', asyn
   const hub = repository.createSpecialistHub({ name: 'Reindex' });
 
   // A legacy chunk embedded by a different model at a different dimension.
-  repository.saveSpecialistChunk({ hubId: hub.id, sourceTitle: 'legacy', chunkText: 'reactor criticality data', embedding: [0.1, 0.2, 0.3, 0.4], embeddingModel: 'old-model' });
+  repository.saveSpecialistChunk({
+    hubId: hub.id,
+    sourceTitle: 'legacy',
+    chunkText: 'reactor criticality data',
+    embedding: [0.1, 0.2, 0.3, 0.4],
+    embeddingModel: 'old-model',
+  });
   assert.equal(repository.getSpecialistHub(hub.id).retrievableChunkCount, 0);
 
   // Stub embedder returns the current model's 768-d vectors.
-  const ollama = { generateEmbedding: async () => new Array(768).fill(0).map((_, i) => Math.sin(i)) };
+  const ollama = {
+    generateEmbedding: async () => new Array(768).fill(0).map((_, i) => Math.sin(i)),
+  };
   const worker = new DeepResearchWorker({ repository, ollama });
 
   const result = await worker.reindexHub({ hubId: hub.id, embeddingModel: model });
@@ -322,7 +380,8 @@ test('deriveSearchQueries returns a short simple topic verbatim (no model call)'
 
 test('deriveSearchQueries falls back to a heuristic first line when no quotes and no model', async () => {
   const worker = new DeepResearchWorker({ repository: {}, ollama: {} });
-  const brief = 'Target Domain: Clean Architecture and decoupled service layers\nMore detail follows on the next lines that should be ignored.';
+  const brief =
+    'Target Domain: Clean Architecture and decoupled service layers\nMore detail follows on the next lines that should be ignored.';
   const queries = await worker.deriveSearchQueries(brief, null); // no model → heuristic
   assert.equal(queries.length, 1);
   assert.ok(/Clean Architecture/i.test(queries[0]));
@@ -336,7 +395,11 @@ test('runWebDeepResearch reports an honest failure when search finds no sources'
   // Inject a searcher that finds nothing (simulates every provider empty).
   const worker = new DeepResearchWorker({ repository, ollama, search: async () => [] });
 
-  const res = await worker.runWebDeepResearch({ hubId: 'h', topic: 'an extremely obscure topic', embeddingModel: 'nomic-embed-text' });
+  const res = await worker.runWebDeepResearch({
+    hubId: 'h',
+    topic: 'an extremely obscure topic',
+    embeddingModel: 'nomic-embed-text',
+  });
 
   assert.equal(res.success, false);
   assert.match(res.reason, /no sources/i);
@@ -350,10 +413,20 @@ test('runWebDeepResearch indexes search snippets so unreachable pages do not zer
   const ollama = { generateEmbedding: async () => new Array(768).fill(0.01) };
   // One result with a usable snippet but a URL that refuses instantly (local, no
   // network): the page scrape fails, yet the snippet still gets indexed.
-  const search = async () => [{ title: 'Photosynthesis', url: 'http://127.0.0.1:9/x', snippet: 'Photosynthesis converts light into chemical energy in plants.' }];
+  const search = async () => [
+    {
+      title: 'Photosynthesis',
+      url: 'http://127.0.0.1:9/x',
+      snippet: 'Photosynthesis converts light into chemical energy in plants.',
+    },
+  ];
   const worker = new DeepResearchWorker({ repository, ollama, search });
 
-  const res = await worker.runWebDeepResearch({ hubId: 'h', topic: 'photosynthesis', embeddingModel: 'nomic-embed-text' });
+  const res = await worker.runWebDeepResearch({
+    hubId: 'h',
+    topic: 'photosynthesis',
+    embeddingModel: 'nomic-embed-text',
+  });
 
   assert.equal(res.success, true);
   assert.ok(res.totalChunks >= 1);
@@ -372,11 +445,20 @@ test('deepResearch extracts text from a real PDF and indexes it (pdf-parse v2 AP
     const ollama = { generateEmbedding: async () => new Array(768).fill(0.01) };
     const worker = new DeepResearchWorker({ repository, ollama });
 
-    const result = await worker.ingestFilePath({ hubId: 'h1', filePath: pdfPath, model: 'nomic-embed-text' });
+    const result = await worker.ingestFilePath({
+      hubId: 'h1',
+      filePath: pdfPath,
+      model: 'nomic-embed-text',
+    });
 
     assert.equal(result.success, true);
     assert.ok(result.chunksCount >= 1);
-    assert.ok(saved.map((c) => c.chunkText).join(' ').includes(known));
+    assert.ok(
+      saved
+        .map((c) => c.chunkText)
+        .join(' ')
+        .includes(known),
+    );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -386,14 +468,21 @@ test('PDF ingestion records page-level citation provenance', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sk-pdf-'));
   try {
     const pdfPath = path.join(dir, 'provenance.pdf');
-    fs.writeFileSync(pdfPath, buildPdf('Clause 7.2 limits liability to fees paid in the prior twelve months.'));
+    fs.writeFileSync(
+      pdfPath,
+      buildPdf('Clause 7.2 limits liability to fees paid in the prior twelve months.'),
+    );
 
     const saved = [];
     const repository = { saveSpecialistChunk: (c) => saved.push(c) };
     const ollama = { generateEmbedding: async () => new Array(768).fill(0.01) };
     const worker = new DeepResearchWorker({ repository, ollama });
 
-    const result = await worker.ingestFilePath({ hubId: 'h1', filePath: pdfPath, model: 'nomic-embed-text' });
+    const result = await worker.ingestFilePath({
+      hubId: 'h1',
+      filePath: pdfPath,
+      model: 'nomic-embed-text',
+    });
     assert.equal(result.success, true);
 
     // Every chunk must know which page it came from, so a citation can point there.
@@ -419,7 +508,11 @@ test('deepResearch reports a scanned/empty PDF as failure, never silent 0-chunk 
     const ollama = { generateEmbedding: async () => new Array(768).fill(0.01) };
     const worker = new DeepResearchWorker({ repository, ollama });
 
-    const result = await worker.ingestFilePath({ hubId: 'h1', filePath: pdfPath, model: 'nomic-embed-text' });
+    const result = await worker.ingestFilePath({
+      hubId: 'h1',
+      filePath: pdfPath,
+      model: 'nomic-embed-text',
+    });
 
     assert.equal(result.success, false);
     assert.equal(result.chunksCount, 0);

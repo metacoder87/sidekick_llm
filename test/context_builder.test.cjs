@@ -34,7 +34,10 @@ test('buildChatContext grounds an answer in the consulted Expert and reports pre
   const { repository, ollama, memoryManager, researchWorker, allSettings } = setup();
   const embeddingModel = allSettings.embeddingModel;
 
-  const hub = repository.createSpecialistHub({ name: 'Legal Expert', systemPrompt: 'Read contracts literally.' });
+  const hub = repository.createSpecialistHub({
+    name: 'Legal Expert',
+    systemPrompt: 'Read contracts literally.',
+  });
   repository.saveSpecialistChunk({
     hubId: hub.id,
     sourceTitle: 'agreement.pdf',
@@ -124,13 +127,19 @@ test('buildChatContext suggests an un-consulted Expert that holds relevant knowl
 
   const legal = repository.createSpecialistHub({ name: 'Legal Expert' });
   repository.saveSpecialistChunk({
-    hubId: legal.id, sourceTitle: 'a.pdf', chunkText: 'liability clause text',
-    embedding: [1, 0, 0], embeddingModel,
+    hubId: legal.id,
+    sourceTitle: 'a.pdf',
+    chunkText: 'liability clause text',
+    embedding: [1, 0, 0],
+    embeddingModel,
   });
   const nutrition = repository.createSpecialistHub({ name: 'Nutrition Expert' });
   repository.saveSpecialistChunk({
-    hubId: nutrition.id, sourceTitle: 'b.pdf', chunkText: 'protein intake guidance',
-    embedding: [0, 1, 0], embeddingModel,
+    hubId: nutrition.id,
+    sourceTitle: 'b.pdf',
+    chunkText: 'protein intake guidance',
+    embedding: [0, 1, 0],
+    embeddingModel,
   });
 
   const conversation = repository.createConversation('Mixed');

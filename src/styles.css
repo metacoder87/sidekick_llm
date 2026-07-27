@@ -1,14 +1,20 @@
 :root {
-  font-family: "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family:
+    'Segoe UI Variable',
+    'Segoe UI',
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
   line-height: 1.5;
   font-weight: 400;
 }
 
 /* CYBERPUNK NEON DARK MODE (DEFAULT) */
-[data-theme="cyberpunk"],
+[data-theme='cyberpunk'],
 :root:not([data-theme]) {
   color-scheme: dark;
-  --bg-root: radial-gradient(circle at top left, rgba(0, 243, 255, 0.12), transparent 45%),
+  --bg-root:
+    radial-gradient(circle at top left, rgba(0, 243, 255, 0.12), transparent 45%),
     radial-gradient(circle at bottom right, rgba(255, 0, 127, 0.14), transparent 40%),
     linear-gradient(135deg, #07090e 0%, #0d111a 50%, #06080d 100%);
   --text-main: #e2f1f8;
@@ -25,7 +31,7 @@
 }
 
 /* SUIT & TIE PROFESSIONAL LIGHT MODE */
-[data-theme="professional"] {
+[data-theme='professional'] {
   color-scheme: light;
   --bg-root: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
   --text-main: #1e293b;
@@ -56,7 +62,9 @@ body,
 body {
   background: var(--bg-root);
   color: var(--text-main);
-  transition: background 250ms ease, color 250ms ease;
+  transition:
+    background 250ms ease,
+    color 250ms ease;
 }
 
 button,
@@ -92,12 +100,14 @@ button {
 }
 
 .resizable-divider::after {
-  content: "";
+  content: '';
   width: 2px;
   height: 36px;
   background: var(--panel-border);
   border-radius: 999px;
-  transition: background 150ms ease, height 150ms ease;
+  transition:
+    background 150ms ease,
+    height 150ms ease;
 }
 
 .resizable-divider:hover::after,
@@ -191,11 +201,11 @@ button {
   font-size: 0.88rem;
 }
 
-[data-theme="cyberpunk"] .primary-button {
+[data-theme='cyberpunk'] .primary-button {
   color: #05070a;
 }
 
-[data-theme="professional"] .primary-button {
+[data-theme='professional'] .primary-button {
   color: #ffffff;
 }
 
@@ -248,7 +258,10 @@ button {
   height: 22px;
   border-radius: 50%;
   background: #000000;
-  box-shadow: 0 0 10px #00f3ff, 0 0 20px #ff007f, inset 0 0 6px #00f3ff;
+  box-shadow:
+    0 0 10px #00f3ff,
+    0 0 20px #ff007f,
+    inset 0 0 6px #00f3ff;
   border: 1.5px solid #00f3ff;
   display: block;
 }
@@ -545,7 +558,7 @@ button {
   margin: 0;
   padding: 12px 14px;
   overflow-x: auto;
-  font-family: "Cascadia Code", Consolas, monospace;
+  font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 0.88rem;
   line-height: 1.4;
   color: #f4ecdf;

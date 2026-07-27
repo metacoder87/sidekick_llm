@@ -53,8 +53,8 @@ export default function LockScreen({ sidekick, status, onUnlocked }) {
         <div className="lock-panel__brand">🔒 Sidekick</div>
         <h1>Your corpus is encrypted</h1>
         <p>
-          Enter your passphrase to open your conversations, Experts and memory. Everything
-          stays on this machine.
+          Enter your passphrase to open your conversations, Experts and memory. Everything stays on
+          this machine.
         </p>
 
         <input
@@ -73,8 +73,8 @@ export default function LockScreen({ sidekick, status, onUnlocked }) {
         </button>
 
         <p className="lock-hint">
-          There is no way to recover this passphrase. If it is lost, the corpus cannot be
-          opened — restore from an export or an unencrypted backup instead.
+          There is no way to recover this passphrase. If it is lost, the corpus cannot be opened —
+          restore from an export or an unencrypted backup instead.
         </p>
       </form>
     </div>

@@ -59,9 +59,16 @@ test('encrypting removes plaintext from disk and the corpus still opens with the
     assert.equal(fileContains(dbPath, MARKER), true);
     assert.equal(isDatabaseEncrypted(dbPath), false);
 
-    const result = rekeyDatabase({ filename: dbPath, newPassphrase: 'correct horse battery', backupTag: 'test' });
+    const result = rekeyDatabase({
+      filename: dbPath,
+      newPassphrase: 'correct horse battery',
+      backupTag: 'test',
+    });
     assert.equal(result.encrypted, true);
-    assert.ok(fs.existsSync(result.backupPath), 'a backup must be taken before rewriting the corpus');
+    assert.ok(
+      fs.existsSync(result.backupPath),
+      'a backup must be taken before rewriting the corpus',
+    );
 
     // The marker is gone from the raw file, and the header no longer says SQLite.
     assert.equal(fileContains(dbPath, MARKER), false, 'plaintext must not survive on disk');
@@ -72,7 +79,12 @@ test('encrypting removes plaintext from disk and the corpus still opens with the
     assert.equal(repo.integrity.ok, true);
     assert.equal(repo.getConversation(conversationId).messages[0].content, MARKER);
     assert.equal(repo.listUserMemories()[0].fact, `${MARKER} is a stored fact`);
-    const hits = repo.searchSpecialistVectorMemory(hubId, [0.1, 0.2, 0.3], 4, repo.getSetting('embeddingModel'));
+    const hits = repo.searchSpecialistVectorMemory(
+      hubId,
+      [0.1, 0.2, 0.3],
+      4,
+      repo.getSetting('embeddingModel'),
+    );
     assert.equal(hits.length, 1);
     assert.equal(hits[0].page, 4, 'citation provenance survives encryption');
 
@@ -99,7 +111,10 @@ test('an encrypted corpus cannot be opened without the passphrase, or with the w
 
     // Constructing the repository without the key must fail rather than silently
     // producing an empty corpus.
-    assert.throws(() => new ConversationRepository(dbPath), /not a database|encrypted|file is not/i);
+    assert.throws(
+      () => new ConversationRepository(dbPath),
+      /not a database|encrypted|file is not/i,
+    );
   } finally {
     rmDir(dir);
   }
@@ -116,7 +131,12 @@ test('encryption is reversible — decrypting restores a working plaintext corpu
     assert.equal(isDatabaseEncrypted(dbPath), true);
 
     // Decrypt: rekey to an empty passphrase.
-    rekeyDatabase({ filename: dbPath, currentPassphrase: 'pass1', newPassphrase: '', backupTag: 'test' });
+    rekeyDatabase({
+      filename: dbPath,
+      currentPassphrase: 'pass1',
+      newPassphrase: '',
+      backupTag: 'test',
+    });
     assert.equal(isDatabaseEncrypted(dbPath), false);
 
     const repo = new ConversationRepository(dbPath);
@@ -134,7 +154,12 @@ test('the passphrase can be changed, and the old one stops working', () => {
     const { conversationId } = seedCorpus(dbPath, 'ROTATE-ME-1234');
 
     rekeyDatabase({ filename: dbPath, newPassphrase: 'first-pass', backupTag: 'test' });
-    rekeyDatabase({ filename: dbPath, currentPassphrase: 'first-pass', newPassphrase: 'second-pass', backupTag: 'test' });
+    rekeyDatabase({
+      filename: dbPath,
+      currentPassphrase: 'first-pass',
+      newPassphrase: 'second-pass',
+      backupTag: 'test',
+    });
 
     assert.equal(canOpenWithPassphrase(dbPath, 'second-pass'), true);
     assert.equal(canOpenWithPassphrase(dbPath, 'first-pass'), false);
@@ -155,7 +180,13 @@ test('rekey refuses to run with a wrong or missing current passphrase', () => {
     rekeyDatabase({ filename: dbPath, newPassphrase: 'the-key', backupTag: 'test' });
 
     assert.throws(
-      () => rekeyDatabase({ filename: dbPath, currentPassphrase: 'nope', newPassphrase: 'x', backupTag: 'test' }),
+      () =>
+        rekeyDatabase({
+          filename: dbPath,
+          currentPassphrase: 'nope',
+          newPassphrase: 'x',
+          backupTag: 'test',
+        }),
       /incorrect/i,
     );
     assert.throws(
@@ -179,7 +210,11 @@ test('isDatabaseEncrypted handles missing, empty and in-memory databases', () =>
 
     const empty = path.join(dir, 'empty.db');
     fs.writeFileSync(empty, '');
-    assert.equal(isDatabaseEncrypted(empty), false, 'a 0-byte file is a fresh DB, not an encrypted one');
+    assert.equal(
+      isDatabaseEncrypted(empty),
+      false,
+      'a 0-byte file is a fresh DB, not an encrypted one',
+    );
   } finally {
     rmDir(dir);
   }

@@ -5,7 +5,10 @@ function extractMainText(html) {
   if (!html) return '';
 
   // Remove script, style, noscript, header, nav, footer, svg tags
-  let cleaned = html.replace(/<(script|style|noscript|header|nav|footer|svg|iframe)[\s\S]*?<\/\1>/gi, ' ');
+  let cleaned = html.replace(
+    /<(script|style|noscript|header|nav|footer|svg|iframe)[\s\S]*?<\/\1>/gi,
+    ' ',
+  );
 
   // Replace block elements with linebreaks
   cleaned = cleaned.replace(/<\/(p|div|h[1-6]|li|tr|br)>/gi, '\n');
@@ -39,7 +42,7 @@ async function scrapePage(url, timeoutMs = 7000) {
     const response = await fetch(url, {
       headers: {
         'User-Agent': USER_AGENT,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       },
       signal: controller.signal,
     });

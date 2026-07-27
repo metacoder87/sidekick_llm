@@ -271,11 +271,23 @@ test('repository write boundary refuses empty or non-finite embeddings', () => {
   const hub = repository.createSpecialistHub({ name: 'Guard Test' });
 
   assert.throws(
-    () => repository.saveSpecialistChunk({ hubId: hub.id, sourceTitle: 'd', chunkText: 'x', embedding: [] }),
+    () =>
+      repository.saveSpecialistChunk({
+        hubId: hub.id,
+        sourceTitle: 'd',
+        chunkText: 'x',
+        embedding: [],
+      }),
     /empty/i,
   );
   assert.throws(
-    () => repository.saveSpecialistChunk({ hubId: hub.id, sourceTitle: 'd', chunkText: 'x', embedding: [1, NaN, 2] }),
+    () =>
+      repository.saveSpecialistChunk({
+        hubId: hub.id,
+        sourceTitle: 'd',
+        chunkText: 'x',
+        embedding: [1, NaN, 2],
+      }),
     /non-finite/i,
   );
   // Nothing was persisted.
@@ -303,7 +315,9 @@ test('repository backs up a legacy unversioned database before migrating, preser
       id TEXT PRIMARY KEY, title TEXT NOT NULL, summary TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_message_at TEXT
     );`);
-    raw.prepare(`INSERT INTO conversations VALUES ('legacy-1','Legacy thread',NULL,'t','t',NULL)`).run();
+    raw
+      .prepare(`INSERT INTO conversations VALUES ('legacy-1','Legacy thread',NULL,'t','t',NULL)`)
+      .run();
     raw.pragma('user_version = 0');
     raw.close();
 
@@ -331,7 +345,11 @@ test('repository exports the full corpus and re-imports it losslessly and idempo
 
   const conv = source.createConversation('Quantum notes');
   source.addMessage({ conversationId: conv.id, role: 'user', content: 'What is superposition?' });
-  source.addMessage({ conversationId: conv.id, role: 'assistant', content: 'A combination of basis states.' });
+  source.addMessage({
+    conversationId: conv.id,
+    role: 'assistant',
+    content: 'A combination of basis states.',
+  });
   source.addUserMemory({ fact: 'User studies quantum physics', category: 'user-defined' });
   source.setUserProfile({ name: 'Ada', role: 'Researcher' });
   const hub = source.createSpecialistHub({ name: 'Quantum Expert', systemPrompt: 'Be precise' });
@@ -376,4 +394,3 @@ test('repository exports the full corpus and re-imports it losslessly and idempo
 
   target.close();
 });
-

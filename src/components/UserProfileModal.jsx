@@ -5,20 +5,27 @@ export default function UserProfileModal({ isOpen, onClose, sidekick, onProfileU
   const [role, setRole] = useState('Software Developer');
   const [tone, setTone] = useState('Balanced & Helpful');
   const [stack, setStack] = useState('JavaScript / Node.js');
-  const [instructions, setInstructions] = useState('Provide clean code, clear explanations, and best practices.');
+  const [instructions, setInstructions] = useState(
+    'Provide clean code, clear explanations, and best practices.',
+  );
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (isOpen && sidekick) {
-      sidekick.profile.get().then((profile) => {
-        if (profile) {
-          setName(profile.name || 'User');
-          setRole(profile.role || 'Software Developer');
-          setTone(profile.tone || 'Balanced & Helpful');
-          setStack(profile.stack || 'JavaScript / Node.js');
-          setInstructions(profile.instructions || 'Provide clean code, clear explanations, and best practices.');
-        }
-      }).catch(() => {});
+      sidekick.profile
+        .get()
+        .then((profile) => {
+          if (profile) {
+            setName(profile.name || 'User');
+            setRole(profile.role || 'Software Developer');
+            setTone(profile.tone || 'Balanced & Helpful');
+            setStack(profile.stack || 'JavaScript / Node.js');
+            setInstructions(
+              profile.instructions || 'Provide clean code, clear explanations, and best practices.',
+            );
+          }
+        })
+        .catch(() => {});
     }
   }, [isOpen, sidekick]);
 
@@ -59,7 +66,8 @@ export default function UserProfileModal({ isOpen, onClose, sidekick, onProfileU
         </div>
 
         <p className="modal-description">
-          Configure your personal identity, technical context, and global prompt rules. These preferences are automatically injected into model prompts across all your conversations.
+          Configure your personal identity, technical context, and global prompt rules. These
+          preferences are automatically injected into model prompts across all your conversations.
         </p>
 
         <form onSubmit={handleSave} className="profile-form">
@@ -77,7 +85,12 @@ export default function UserProfileModal({ isOpen, onClose, sidekick, onProfileU
           <div className="form-grid">
             <label className="form-field">
               <span>Primary Tech Stack</span>
-              <input type="text" value={stack} onChange={(e) => setStack(e.target.value)} placeholder="e.g. React, Python, Docker" />
+              <input
+                type="text"
+                value={stack}
+                onChange={(e) => setStack(e.target.value)}
+                placeholder="e.g. React, Python, Docker"
+              />
             </label>
             <label className="form-field">
               <span>Preferred Response Tone</span>

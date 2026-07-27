@@ -37,7 +37,8 @@ async function searchDuckDuckGo(query, maxResults = 5) {
   const results = [];
 
   // Match result blocks in DuckDuckGo HTML
-  const regex = /<a class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+  const regex =
+    /<a class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
   let match;
 
   while ((match = regex.exec(html)) !== null && results.length < maxResults) {
@@ -171,7 +172,7 @@ async function searchBrave(query, apiKey, maxResults = 5) {
   const endpoint = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${maxResults}`;
   const response = await fetch(endpoint, {
     headers: {
-      'Accept': 'application/json',
+      Accept: 'application/json',
       'X-Subscription-Token': apiKey,
       'User-Agent': USER_AGENT,
     },

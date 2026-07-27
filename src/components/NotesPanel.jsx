@@ -76,9 +76,8 @@ export default function NotesPanel({ sidekick, hubId, onChanged }) {
     <div className="notes-panel">
       <h3>Notes ({notes.length})</h3>
       <p className="modal-description">
-        Your own synthesis — insights, conclusions, distilled findings. Every note is
-        embedded into this Expert's vault, so it becomes retrievable knowledge just like
-        an uploaded document.
+        Your own synthesis — insights, conclusions, distilled findings. Every note is embedded into
+        this Expert's vault, so it becomes retrievable knowledge just like an uploaded document.
       </p>
 
       {status ? <div className="status-notice-banner">{status}</div> : null}
@@ -125,7 +124,11 @@ export default function NotesPanel({ sidekick, hubId, onChanged }) {
                 <button type="button" className="ghost-button" onClick={() => startEdit(note)}>
                   Edit
                 </button>
-                <button type="button" className="ghost-button danger" onClick={() => handleDelete(note.id)}>
+                <button
+                  type="button"
+                  className="ghost-button danger"
+                  onClick={() => handleDelete(note.id)}
+                >
                   Delete
                 </button>
               </div>

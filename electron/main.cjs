@@ -36,8 +36,7 @@ function hardenNavigation(contents) {
     // Allow the dev server / local app origin to navigate (HMR, reloads); send
     // anything else to the OS browser.
     const devServerUrl = process.env.VITE_DEV_SERVER_URL;
-    const sameOrigin =
-      (devServerUrl && url.startsWith(devServerUrl)) || url.startsWith('file://');
+    const sameOrigin = (devServerUrl && url.startsWith(devServerUrl)) || url.startsWith('file://');
     if (sameOrigin) {
       return;
     }
@@ -77,13 +76,16 @@ function createWindow() {
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   const previewMode = process.env.PREVIEW === 'true';
 
-  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
-    console.error('Renderer failed to load:', {
-      errorCode,
-      errorDescription,
-      validatedURL,
-    });
-  });
+  mainWindow.webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, validatedURL) => {
+      console.error('Renderer failed to load:', {
+        errorCode,
+        errorDescription,
+        validatedURL,
+      });
+    },
+  );
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error('Renderer process exited unexpectedly:', details);
@@ -157,10 +159,13 @@ async function bootstrap() {
   }
 }
 
-app.whenReady().then(bootstrap).catch((error) => {
-  console.error('Electron bootstrap failed:', error);
-  app.quit();
-});
+app
+  .whenReady()
+  .then(bootstrap)
+  .catch((error) => {
+    console.error('Electron bootstrap failed:', error);
+    app.quit();
+  });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

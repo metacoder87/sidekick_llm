@@ -87,9 +87,10 @@ class DeepResearchWorker {
         const result = await parser.getText();
         // Per-page extraction gives us real page numbers for citations; fall back to
         // the whole-document text if a build doesn't populate `pages`.
-        pages = Array.isArray(result.pages) && result.pages.length
-          ? result.pages
-          : [{ num: null, text: result.text || '' }];
+        pages =
+          Array.isArray(result.pages) && result.pages.length
+            ? result.pages
+            : [{ num: null, text: result.text || '' }];
       } finally {
         await parser.destroy();
       }
@@ -212,7 +213,9 @@ class DeepResearchWorker {
     if (!trimmed) return [];
 
     // 1. Explicit "quoted" search queries embedded in the brief win outright.
-    const quoted = [...trimmed.matchAll(/"([^"]{3,200})"/g)].map((m) => m[1].trim()).filter(Boolean);
+    const quoted = [...trimmed.matchAll(/"([^"]{3,200})"/g)]
+      .map((m) => m[1].trim())
+      .filter(Boolean);
     if (quoted.length > 0) return dedupeStrings(quoted).slice(0, 5);
 
     // 2. Already a simple query — use it verbatim.
@@ -236,7 +239,9 @@ class DeepResearchWorker {
         if (match) {
           const arr = JSON.parse(match[0]);
           if (Array.isArray(arr)) {
-            const queries = dedupeStrings(arr.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()));
+            const queries = dedupeStrings(
+              arr.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()),
+            );
             if (queries.length > 0) return queries.slice(0, 5);
           }
         }
@@ -247,12 +252,24 @@ class DeepResearchWorker {
 
     // 4. Heuristic last resort: first non-empty line, drop a leading "Label:" prefix,
     //    cap to a searchable length.
-    const firstLine = trimmed.split('\n').map((s) => s.trim()).find(Boolean) || trimmed;
+    const firstLine =
+      trimmed
+        .split('\n')
+        .map((s) => s.trim())
+        .find(Boolean) || trimmed;
     const noLabel = firstLine.replace(/^[^:]{0,40}:\s*/, '');
     return [noLabel.split(/\s+/).slice(0, 12).join(' ')];
   }
 
-  async runWebDeepResearch({ hubId, topic, seedUrls = [], model, embeddingModel, searchOptions = {}, onProgress = () => {} }) {
+  async runWebDeepResearch({
+    hubId,
+    topic,
+    seedUrls = [],
+    model,
+    embeddingModel,
+    searchOptions = {},
+    onProgress = () => {},
+  }) {
     const embedModel = embeddingModel || model;
     onProgress({ status: 'searching', message: `Searching the web for "${topic}"...` });
 
@@ -261,7 +278,15 @@ class DeepResearchWorker {
 
     // Helper: embed a piece of text and store it as a vault chunk; returns true on
     // success. Centralizes the write-boundary handling used everywhere below.
-    const indexChunk = async ({ sourceTitle, sourceUrl, chunkText: text, location = null, charStart = null, charEnd = null, sourceType = 'web' }) => {
+    const indexChunk = async ({
+      sourceTitle,
+      sourceUrl,
+      chunkText: text,
+      location = null,
+      charStart = null,
+      charEnd = null,
+      sourceType = 'web',
+    }) => {
       let embedding = null;
       try {
         embedding = await this.ollama.generateEmbedding({ model: embedModel, input: text });
@@ -294,7 +319,9 @@ class DeepResearchWorker {
     const topicIsUrl = /^https?:\/\//i.test(trimmedTopic) || /^www\./i.test(trimmedTopic);
 
     if (topicIsUrl) {
-      const formatted = /^https?:\/\//i.test(trimmedTopic) ? trimmedTopic : `https://${trimmedTopic}`;
+      const formatted = /^https?:\/\//i.test(trimmedTopic)
+        ? trimmedTopic
+        : `https://${trimmedTopic}`;
       if (!targetUrls.includes(formatted)) targetUrls.push(formatted);
     } else if (trimmedTopic) {
       // Decompose the topic/brief into concrete queries, then search each. Routes
@@ -454,7 +481,12 @@ class DeepResearchWorker {
       } catch (_e) {
         // A failed batch shouldn't sink the survey.
       }
-      onProgress({ status: 'aggregating', message: `Surveyed batch ${i + 1}/${batches.length}…`, total: batches.length, current: i + 1 });
+      onProgress({
+        status: 'aggregating',
+        message: `Surveyed batch ${i + 1}/${batches.length}…`,
+        total: batches.length,
+        current: i + 1,
+      });
     }
 
     if (partials.length === 0) {
@@ -477,15 +509,27 @@ class DeepResearchWorker {
             content:
               'Synthesize these partial summaries into one coherent overview. Preserve the bracketed source labels for every claim. Note explicitly where sources disagree. Do not add information beyond the summaries.',
           },
-          { role: 'user', content: `Topic: ${topic}\n\nPartial summaries:\n${partials.join('\n\n')}` },
+          {
+            role: 'user',
+            content: `Topic: ${topic}\n\nPartial summaries:\n${partials.join('\n\n')}`,
+          },
         ],
       });
     } catch (_e) {
       // Keep the concatenated partials if the reduce step fails.
     }
 
-    onProgress({ status: 'complete', message: `Survey complete (${chunks.length} of ${total} chunks).` });
-    return { success: true, summary: (summary || '').trim(), total, sampled: chunks.length, batches: batches.length };
+    onProgress({
+      status: 'complete',
+      message: `Survey complete (${chunks.length} of ${total} chunks).`,
+    });
+    return {
+      success: true,
+      summary: (summary || '').trim(),
+      total,
+      sampled: chunks.length,
+      batches: batches.length,
+    };
   }
 
   // Embed (or re-embed) a note into its Expert's vault so the user's own insight is
@@ -512,7 +556,10 @@ class DeepResearchWorker {
     for (const piece of pieces) {
       let embedding = null;
       try {
-        embedding = await this.ollama.generateEmbedding({ model: embeddingModel, input: piece.text });
+        embedding = await this.ollama.generateEmbedding({
+          model: embeddingModel,
+          input: piece.text,
+        });
       } catch (_e) {
         embedding = null;
       }
@@ -554,7 +601,10 @@ class DeepResearchWorker {
   async reindexHub({ hubId, embeddingModel, onProgress = () => {} }) {
     const targets = this.repository.listChunksForReindex(hubId, embeddingModel);
     if (targets.length === 0) {
-      onProgress({ status: 'complete', message: 'Vault is already fully indexed with the current embedding model.' });
+      onProgress({
+        status: 'complete',
+        message: 'Vault is already fully indexed with the current embedding model.',
+      });
       return { success: true, reindexed: 0, failed: 0, total: 0 };
     }
 
@@ -571,7 +621,10 @@ class DeepResearchWorker {
       const target = targets[i];
       let embedding = null;
       try {
-        embedding = await this.ollama.generateEmbedding({ model: embeddingModel, input: target.chunkText });
+        embedding = await this.ollama.generateEmbedding({
+          model: embeddingModel,
+          input: target.chunkText,
+        });
       } catch (_e) {
         embedding = null;
       }

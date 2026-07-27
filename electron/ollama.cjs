@@ -246,7 +246,10 @@ class OllamaService {
       }
       return { ok: true, dim: payload.embedding.length };
     } catch (error) {
-      return { ok: false, reason: `Cannot reach Ollama to embed with "${model}": ${error.message}` };
+      return {
+        ok: false,
+        reason: `Cannot reach Ollama to embed with "${model}": ${error.message}`,
+      };
     }
   }
 
@@ -279,4 +282,3 @@ module.exports = {
   OllamaService,
   normalizeBaseUrl,
 };
-

@@ -23,14 +23,17 @@ contextBridge.exposeInMainWorld('sidekick', {
   chat: {
     createConversation: (title) => ipcRenderer.invoke(channels.chat.createConversation, title),
     listConversations: () => ipcRenderer.invoke(channels.chat.listConversations),
-    getConversation: (conversationId) => ipcRenderer.invoke(channels.chat.getConversation, conversationId),
+    getConversation: (conversationId) =>
+      ipcRenderer.invoke(channels.chat.getConversation, conversationId),
     renameConversation: (payload) => ipcRenderer.invoke(channels.chat.renameConversation, payload),
-    deleteConversation: (conversationId) => ipcRenderer.invoke(channels.chat.deleteConversation, conversationId),
+    deleteConversation: (conversationId) =>
+      ipcRenderer.invoke(channels.chat.deleteConversation, conversationId),
     searchConversations: (query) => ipcRenderer.invoke(channels.chat.searchConversations, query),
     sendMessageStream: (payload) => ipcRenderer.invoke(channels.chat.sendMessageStream, payload),
     cancelGeneration: (requestId) => ipcRenderer.invoke(channels.chat.cancelGeneration, requestId),
     answerNow: (requestId) => ipcRenderer.invoke(channels.chat.answerNow, requestId),
-    exportConversation: (conversationId) => ipcRenderer.invoke(channels.chat.exportConversation, conversationId),
+    exportConversation: (conversationId) =>
+      ipcRenderer.invoke(channels.chat.exportConversation, conversationId),
     exportAll: () => ipcRenderer.invoke(channels.chat.exportAll),
     importAll: () => ipcRenderer.invoke(channels.chat.importAll),
   },
@@ -73,7 +76,8 @@ contextBridge.exposeInMainWorld('sidekick', {
     exportPack: (hubId) => ipcRenderer.invoke(channels.specialist.exportPack, hubId),
     importPack: () => ipcRenderer.invoke(channels.specialist.importPack),
     catalog: () => ipcRenderer.invoke(channels.specialist.catalog),
-    installFromCatalog: (payload) => ipcRenderer.invoke(channels.specialist.installFromCatalog, payload),
+    installFromCatalog: (payload) =>
+      ipcRenderer.invoke(channels.specialist.installFromCatalog, payload),
   },
   research: {
     start: (payload) => ipcRenderer.invoke(channels.research.start, payload),

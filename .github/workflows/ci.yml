@@ -26,6 +26,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Lint before build: a lint error is cheaper to read than a build failure,
+      # and exhaustive-deps catches stale-closure bugs a green build never would.
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
       - name: Build renderer
         run: npm run build
 

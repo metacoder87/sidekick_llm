@@ -49,7 +49,8 @@ export default function Onboarding({ sidekick, onDone }) {
   const models = catalog?.models || [];
   const embedding = models.find((m) => m.role === 'embedding');
   const hasEmbedding = Boolean(embedding?.installed);
-  const hasChat = models.some((m) => m.role !== 'embedding' && m.installed) ||
+  const hasChat =
+    models.some((m) => m.role !== 'embedding' && m.installed) ||
     (catalog?.installed || []).some((n) => !n.includes('embed'));
   const ready = hasEmbedding && hasChat;
 
@@ -58,8 +59,8 @@ export default function Onboarding({ sidekick, onDone }) {
       <div className="onboarding__panel">
         <div className="onboarding__brand">⚡ Welcome to Sidekick</div>
         <p className="onboarding__lede">
-          A private knowledge workspace that runs entirely on your machine. Nothing you
-          write, upload or research leaves this computer.
+          A private knowledge workspace that runs entirely on your machine. Nothing you write,
+          upload or research leaves this computer.
         </p>
 
         {/* Step 1 — Ollama */}
@@ -71,11 +72,13 @@ export default function Onboarding({ sidekick, onDone }) {
           {ollamaUp === false ? (
             <div className="onboarding__body">
               <p>
-                Sidekick uses <strong>Ollama</strong> to run models locally. It does not
-                appear to be running.
+                Sidekick uses <strong>Ollama</strong> to run models locally. It does not appear to
+                be running.
               </p>
               <ol>
-                <li>Install it from <code>ollama.com</code></li>
+                <li>
+                  Install it from <code>ollama.com</code>
+                </li>
                 <li>Start it (it runs in the background)</li>
                 <li>Press Re-check below</li>
               </ol>
@@ -100,15 +103,15 @@ export default function Onboarding({ sidekick, onDone }) {
 
             {hardware ? (
               <p className="onboarding__hardware">
-                Detected {hardware.totalRamGB} GB RAM, {hardware.cpuCount} cores. Sizes below
-                are downloads — pick what fits your disk and patience.
+                Detected {hardware.totalRamGB} GB RAM, {hardware.cpuCount} cores. Sizes below are
+                downloads — pick what fits your disk and patience.
               </p>
             ) : null}
 
             {!hasEmbedding ? (
               <div className="onboarding__required">
-                An embedding model is <strong>required</strong> — Experts and memory cannot
-                work without one. It is small.
+                An embedding model is <strong>required</strong> — Experts and memory cannot work
+                without one. It is small.
               </div>
             ) : null}
 
@@ -142,7 +145,11 @@ export default function Onboarding({ sidekick, onDone }) {
                     {model.installed ? null : (
                       <button
                         type="button"
-                        className={model.required || model.recommended ? 'primary-button' : 'secondary-button'}
+                        className={
+                          model.required || model.recommended
+                            ? 'primary-button'
+                            : 'secondary-button'
+                        }
                         disabled={Boolean(pulling)}
                         onClick={() => pull(model)}
                       >
@@ -178,8 +185,8 @@ export default function Onboarding({ sidekick, onDone }) {
         </div>
 
         <p className="onboarding__footnote">
-          You can pull any other Ollama model yourself — this list is just a starting point.
-          Change models any time in Settings.
+          You can pull any other Ollama model yourself — this list is just a starting point. Change
+          models any time in Settings.
         </p>
       </div>
     </div>

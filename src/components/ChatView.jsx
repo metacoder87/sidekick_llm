@@ -42,7 +42,11 @@ function FormattedContent({ text }) {
         if (part.type === 'code') {
           return <CodeBlock key={idx} language={part.language} code={part.content} />;
         }
-        return <p key={idx} className="formatted-paragraph">{part.content}</p>;
+        return (
+          <p key={idx} className="formatted-paragraph">
+            {part.content}
+          </p>
+        );
       })}
     </div>
   );
@@ -93,7 +97,11 @@ function SaveAsNote({ message, experts, onSaveNote }) {
   return (
     <div className="save-note-row">
       {experts.length > 1 ? (
-        <select value={target} onChange={(e) => setTarget(e.target.value)} disabled={state === 'saving'}>
+        <select
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          disabled={state === 'saving'}
+        >
           {experts.map((expert) => (
             <option key={expert.id} value={expert.id}>
               {expert.name}
@@ -172,7 +180,10 @@ function MessageBubble({ message, experts = [], onSaveNote, onAddExpert }) {
           ))}
         </div>
       ) : null}
-      {message.role === 'assistant' && message.content && message.status !== 'streaming' && !isPass ? (
+      {message.role === 'assistant' &&
+      message.content &&
+      message.status !== 'streaming' &&
+      !isPass ? (
         <SaveAsNote message={message} experts={experts} onSaveNote={onSaveNote} />
       ) : null}
     </article>
@@ -181,7 +192,9 @@ function MessageBubble({ message, experts = [], onSaveNote, onAddExpert }) {
 
 function GroundingBadge({ grounding }) {
   // Back-compat: older single-expert shape was { name, grounded, matches }.
-  const experts = grounding.experts || (grounding.name ? [{ name: grounding.name, matches: grounding.matches }] : []);
+  const experts =
+    grounding.experts ||
+    (grounding.name ? [{ name: grounding.name, matches: grounding.matches }] : []);
   const contributing = experts.filter((e) => (e.matches || 0) > 0);
 
   if (grounding.grounded) {
@@ -196,8 +209,8 @@ function GroundingBadge({ grounding }) {
   const names = experts.map((e) => e.name).join(', ');
   return (
     <div className="grounding-badge grounding-badge--ungrounded">
-      ⚠️ No matching vault knowledge from {names || 'the selected experts'} for this question —
-      this answer is from the model, not cited sources.
+      ⚠️ No matching vault knowledge from {names || 'the selected experts'} for this question — this
+      answer is from the model, not cited sources.
     </div>
   );
 }

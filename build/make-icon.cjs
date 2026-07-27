@@ -18,7 +18,7 @@ const BOLT = [
   [0.56, 0.08],
   [0.28, 0.54],
   [0.46, 0.54],
-  [0.40, 0.92],
+  [0.4, 0.92],
   [0.72, 0.44],
   [0.53, 0.44],
 ];
@@ -140,4 +140,6 @@ function encodePng(pixels) {
 
 const target = path.join(__dirname, 'icon.png');
 fs.writeFileSync(target, encodePng(renderPixels()));
-console.log(`wrote ${target} (${SIZE}x${SIZE}, ${(fs.statSync(target).size / 1024).toFixed(1)} KB)`);
+console.log(
+  `wrote ${target} (${SIZE}x${SIZE}, ${(fs.statSync(target).size / 1024).toFixed(1)} KB)`,
+);

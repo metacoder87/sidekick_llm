@@ -80,7 +80,10 @@ test('a round-2 turn that merely restates an earlier point becomes a visible pas
   const result = await rt.run({
     conversationId: 'c',
     content: 'Q',
-    hubs: [{ id: 'a', name: 'Alpha Expert' }, { id: 'b', name: 'Beta Expert' }],
+    hubs: [
+      { id: 'a', name: 'Alpha Expert' },
+      { id: 'b', name: 'Beta Expert' },
+    ],
     rounds: 2,
     model: 'm',
     onTurnComplete: (t) => completed.push(t),
@@ -116,7 +119,10 @@ test('a fully redundant round ends the discussion early instead of burning round
   const result = await rt.run({
     conversationId: 'c',
     content: 'Q',
-    hubs: [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }],
+    hubs: [
+      { id: 'a', name: 'Alpha' },
+      { id: 'b', name: 'Beta' },
+    ],
     rounds: 5,
     model: 'm',
   });
@@ -145,7 +151,8 @@ function stubOllama(replies) {
   return {
     calls,
     generateChat: async ({ messages, model }) => {
-      const reply = typeof replies === 'function' ? replies(calls.length, messages) : replies[calls.length];
+      const reply =
+        typeof replies === 'function' ? replies(calls.length, messages) : replies[calls.length];
       calls.push({ model, messages });
       return reply ?? 'ok';
     },
@@ -208,7 +215,11 @@ test('an Expert may pass, and a pass is reported rather than padded', async () =
 
   const completed = [];
   const result = await rt.run({
-    conversationId: 'c1', content: 'Q', hubs: HUBS, rounds: 1, model: 'chat',
+    conversationId: 'c1',
+    content: 'Q',
+    hubs: HUBS,
+    rounds: 1,
+    model: 'chat',
     onTurnComplete: (t) => completed.push(t),
   });
 
@@ -225,7 +236,13 @@ test('when every Expert passes, the moderator wraps up early instead of burning 
   const ollama = stubOllama((i) => (i < 2 ? PASS_TOKEN : 'summary'));
   const rt = new RoundtableOrchestrator({ repository: {}, ollama, buildContext });
 
-  const result = await rt.run({ conversationId: 'c1', content: 'Q', hubs: HUBS, rounds: 4, model: 'chat' });
+  const result = await rt.run({
+    conversationId: 'c1',
+    content: 'Q',
+    hubs: HUBS,
+    rounds: 4,
+    model: 'chat',
+  });
 
   assert.equal(result.stoppedEarly, 'all experts had nothing further to add');
   // 2 passes + moderator only — rounds 2..4 were skipped.
@@ -239,10 +256,16 @@ test('"answer now" skips remaining rounds and goes straight to the moderator', a
 
   let wrapUp = false;
   const result = await rt.run({
-    conversationId: 'c1', content: 'Q', hubs: HUBS, rounds: 4, model: 'chat',
+    conversationId: 'c1',
+    content: 'Q',
+    hubs: HUBS,
+    rounds: 4,
+    model: 'chat',
     control: { shouldWrapUp: () => wrapUp },
     // Request the summary once the first Expert has spoken.
-    onTurnComplete: () => { wrapUp = true; },
+    onTurnComplete: () => {
+      wrapUp = true;
+    },
   });
 
   assert.equal(result.stoppedEarly, 'user requested the summary');
@@ -256,7 +279,11 @@ test('abort stops the discussion and skips the moderator, keeping produced turns
   const rt = new RoundtableOrchestrator({ repository: {}, ollama, buildContext });
 
   const result = await rt.run({
-    conversationId: 'c1', content: 'Q', hubs: HUBS, rounds: 3, model: 'chat',
+    conversationId: 'c1',
+    content: 'Q',
+    hubs: HUBS,
+    rounds: 3,
+    model: 'chat',
     control: { signal: controller.signal },
     onTurnComplete: () => controller.abort(),
   });
@@ -280,7 +307,11 @@ test('one Expert failing does not sink the discussion', async () => {
 
   const completed = [];
   const result = await rt.run({
-    conversationId: 'c1', content: 'Q', hubs: HUBS, rounds: 1, model: 'chat',
+    conversationId: 'c1',
+    content: 'Q',
+    hubs: HUBS,
+    rounds: 1,
+    model: 'chat',
     onTurnComplete: (t) => completed.push(t),
   });
 
@@ -293,8 +324,13 @@ test('roundtable routes Expert turns and the moderator to their configured model
   const rt = new RoundtableOrchestrator({ repository: {}, ollama, buildContext });
 
   await rt.run({
-    conversationId: 'c1', content: 'Q', hubs: [HUBS[0]], rounds: 1,
-    model: 'fallback', expertModel: 'fast-model', moderatorModel: 'big-model',
+    conversationId: 'c1',
+    content: 'Q',
+    hubs: [HUBS[0]],
+    rounds: 1,
+    model: 'fallback',
+    expertModel: 'fast-model',
+    moderatorModel: 'big-model',
   });
 
   assert.equal(ollama.calls[0].model, 'fast-model', 'expert turns use the expert model');
@@ -305,7 +341,12 @@ test('isPass recognises explicit passes without swallowing real answers', () => 
   assert.equal(isPass(PASS_TOKEN), true);
   assert.equal(isPass(`  ${PASS_TOKEN}.  `), true);
   assert.equal(isPass(''), true);
-  assert.equal(isPass('I agree, and would add that protein timing matters less than total intake across the day.'), false);
+  assert.equal(
+    isPass(
+      'I agree, and would add that protein timing matters less than total intake across the day.',
+    ),
+    false,
+  );
   // A long answer that merely mentions the token is not a pass.
   const long = `Some experts say ${PASS_TOKEN} is a useful convention, but here is my substantive view: ${'x'.repeat(200)}`;
   assert.equal(isPass(long), false);
