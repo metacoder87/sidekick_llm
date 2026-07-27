@@ -52,15 +52,50 @@ embeddings, notes, and documents never leave your machine.
 - **Documents / web**: `pdf-parse` (v2) for PDFs, a native-fetch scraper for pages
 - **LLM**: Ollama HTTP API — `/api/chat` (streaming) and `/api/embeddings`
 
-## Prerequisites
+## System requirements
 
-- [Ollama](https://ollama.com) running locally (default `http://localhost:11434`)
-- At least one chat model, e.g. `ollama pull llama3:8b`
-- A dedicated embedding model (required for Experts & memory search):
+**Sidekick runs models on your machine, so your hardware sets the ceiling.** These
+numbers are published up front on purpose — a local-LLM app that hides its hardware
+cost earns refunds.
 
-  ```bash
-  ollama pull nomic-embed-text
-  ```
+**[Ollama](https://ollama.com) is a required prerequisite.** Sidekick does not bundle
+an inference engine; it talks to Ollama at `http://localhost:11434`.
+
+| | Minimum | Comfortable | For the larger models |
+|---|---|---|---|
+| **RAM** | 8 GB | 16 GB | 32–48 GB |
+| **Disk** | ~3 GB | ~8 GB | 25 GB+ |
+| **OS** | Windows 10+, macOS 12+, or Linux | | |
+
+Disk figures are models plus the app; your corpus grows on top of that. A GPU is not
+required — Ollama will use one if present, and everything is far faster with it.
+
+**Recommendations are based on total system RAM, not GPU VRAM**, because VRAM cannot
+be read reliably across platforms (Windows WMI under-reports modern cards — an RTX
+5080 reports 4 GB). An honest RAM figure beats a confident wrong VRAM one.
+
+### Models
+
+The app's first-run screen detects your RAM, shows what fits, and installs your
+choices with one click. To do it by hand:
+
+```bash
+ollama pull nomic-embed-text   # 0.3 GB — REQUIRED for Experts and memory search
+ollama pull llama3.1:8b        # 4.7 GB — recommended starting chat model
+```
+
+| Model | Download | RAM floor | Role |
+|---|---|---|---|
+| `nomic-embed-text` | 0.3 GB | 4 GB | **Required.** All retrieval depends on it |
+| `llama3.2:3b` | 2.0 GB | 8 GB | Fast background work (summaries, extraction) |
+| `llama3.1:8b` | 4.7 GB | 16 GB | Recommended general chat |
+| `mistral:7b` | 4.4 GB | 16 GB | Alternative voice for Round Tables |
+| `gemma2:9b` | 5.4 GB | 16 GB | Strong prose and editing |
+| `qwen2.5:14b` | 9.0 GB | 32 GB | Better reasoning for analysis |
+| `qwen2.5:32b` | 20 GB | 48 GB | Best local quality, real speed cost |
+
+Any Ollama model works — this list is a starting point, not a restriction. **Your
+choice of model is always yours** (ROADMAP invariant #5).
 
 ## Getting started
 
@@ -77,6 +112,8 @@ npm run dev
 | `npm test` | Run the full test suite (Node + Electron native runtime) |
 | `npm run build` | Build the production renderer bundle to `dist/` |
 | `npm run rebuild:native` | Rebuild native modules (`better-sqlite3`) for the Electron ABI |
+| `npm run lint` | ESLint across main process, renderer, and tests |
+| `npm run format` | Apply Prettier (code only — Markdown is left alone) |
 
 ## Notes
 
@@ -94,3 +131,19 @@ npm run dev
 - [ARCHITECTURE.md](ARCHITECTURE.md) — system design, data model, pipelines
 - [CONTRIBUTING.md](CONTRIBUTING.md) — dev setup, project layout, testing, migrations
 - [ROADMAP.md](ROADMAP.md) — thesis, design invariants, staged plan, and status
+- [RELEASING.md](RELEASING.md) — packaging, code signing, and the update channel
+
+## Limits and legal
+
+Sidekick is a **research tool, not a professional**. It presents material and its
+sources so you can judge for yourself; it does not give medical, legal, or financial
+advice, and its answers can be confidently wrong. A citation proves where a claim
+came from — not that it is correct. Follow it back to the source for anything that
+matters.
+
+- [LEGAL/DISCLAIMER.md](LEGAL/DISCLAIMER.md) — what the tool can get wrong, in plain
+  language (also shown in-app under **Settings → Legal & Limits**)
+- [LEGAL/PRIVACY.md](LEGAL/PRIVACY.md) — no account, no telemetry, no server; exactly
+  when the network is used
+- [LEGAL/EULA.md](LEGAL/EULA.md) — **draft; requires review by a lawyer before
+  distribution**
