@@ -783,10 +783,14 @@ left on disk for safety — the UI names its path so the user can remove it.
       - [ ] macOS/Linux builds need their own runners (mac cannot be built on Windows).
 - [ ] **License activation:** offline-verifiable signed license files / keys (no
       phone-home required, consistent with the privacy thesis).
-- [ ] **Onboarding / cold-start:** guided first run — check/pull the embedding model,
-      help pick a chat model, and build one genuinely useful Expert in <5 min.
-- [ ] **Model management & curated recommendations.** The user always chooses the
-      model (invariant #5); the app's job is to make choosing easy.
+- [x] **Onboarding / cold-start ✅ SHIPPED.** Guided first run appears when Ollama is
+      unreachable or no model is installed: connection check with instructions,
+      detected hardware, curated model list with sizes/purpose/fit, streaming download
+      progress, and continue blocked until a usable model exists (Skip still offered).
+      *Building a first Expert in <5 min is already covered by the Expert Library and
+      drop-a-doc.*
+- [x] **Model management & curated recommendations ✅ SHIPPED.** The user always chooses
+      the model (invariant #5); the app makes choosing easy.
       - **Sortable/filterable model list** — by size, family, and role suitability
         (fast/small vs accurate/large vs uncensored vs embedding), reading what is
         actually installed from `/api/tags` plus recorded parameter size.
