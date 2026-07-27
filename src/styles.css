@@ -1,14 +1,20 @@
 :root {
-  font-family: "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family:
+    'Segoe UI Variable',
+    'Segoe UI',
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
   line-height: 1.5;
   font-weight: 400;
 }
 
 /* CYBERPUNK NEON DARK MODE (DEFAULT) */
-[data-theme="cyberpunk"],
+[data-theme='cyberpunk'],
 :root:not([data-theme]) {
   color-scheme: dark;
-  --bg-root: radial-gradient(circle at top left, rgba(0, 243, 255, 0.12), transparent 45%),
+  --bg-root:
+    radial-gradient(circle at top left, rgba(0, 243, 255, 0.12), transparent 45%),
     radial-gradient(circle at bottom right, rgba(255, 0, 127, 0.14), transparent 40%),
     linear-gradient(135deg, #07090e 0%, #0d111a 50%, #06080d 100%);
   --text-main: #e2f1f8;
@@ -25,7 +31,7 @@
 }
 
 /* SUIT & TIE PROFESSIONAL LIGHT MODE */
-[data-theme="professional"] {
+[data-theme='professional'] {
   color-scheme: light;
   --bg-root: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
   --text-main: #1e293b;
@@ -56,7 +62,9 @@ body,
 body {
   background: var(--bg-root);
   color: var(--text-main);
-  transition: background 250ms ease, color 250ms ease;
+  transition:
+    background 250ms ease,
+    color 250ms ease;
 }
 
 button,
@@ -92,12 +100,14 @@ button {
 }
 
 .resizable-divider::after {
-  content: "";
+  content: '';
   width: 2px;
   height: 36px;
   background: var(--panel-border);
   border-radius: 999px;
-  transition: background 150ms ease, height 150ms ease;
+  transition:
+    background 150ms ease,
+    height 150ms ease;
 }
 
 .resizable-divider:hover::after,
@@ -191,11 +201,11 @@ button {
   font-size: 0.88rem;
 }
 
-[data-theme="cyberpunk"] .primary-button {
+[data-theme='cyberpunk'] .primary-button {
   color: #05070a;
 }
 
-[data-theme="professional"] .primary-button {
+[data-theme='professional'] .primary-button {
   color: #ffffff;
 }
 
@@ -248,7 +258,10 @@ button {
   height: 22px;
   border-radius: 50%;
   background: #000000;
-  box-shadow: 0 0 10px #00f3ff, 0 0 20px #ff007f, inset 0 0 6px #00f3ff;
+  box-shadow:
+    0 0 10px #00f3ff,
+    0 0 20px #ff007f,
+    inset 0 0 6px #00f3ff;
   border: 1.5px solid #00f3ff;
   display: block;
 }
@@ -545,7 +558,7 @@ button {
   margin: 0;
   padding: 12px 14px;
   overflow-x: auto;
-  font-family: "Cascadia Code", Consolas, monospace;
+  font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 0.88rem;
   line-height: 1.4;
   color: #f4ecdf;
@@ -823,4 +836,846 @@ button {
   font-size: 0.62rem;
   font-weight: 700;
   vertical-align: top;
+}
+
+/* Precise citation source cards */
+.source-cards {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.source-cards__header {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+}
+
+.source-card {
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(127, 127, 127, 0.06);
+}
+
+.source-card__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.76rem;
+}
+
+.source-card__badge {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.source-card__expert {
+  color: var(--accent-secondary);
+  white-space: nowrap;
+}
+
+.source-card__doc {
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
+}
+
+.source-card__loc {
+  margin-left: auto;
+  opacity: 0.8;
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+  white-space: nowrap;
+}
+
+.source-card__loc.is-precise {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.source-card__quote {
+  margin: 6px 0 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--accent-soft);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  cursor: pointer;
+  white-space: pre-wrap;
+}
+
+/* Notes: first-class knowledge attached to an Expert */
+.notes-panel {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+}
+
+.notes-panel h3 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+
+.notes-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.notes-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.note-card {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.06);
+}
+
+.note-card__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.note-card__meta {
+  margin-left: 8px;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.55;
+}
+
+.note-card__text {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  opacity: 0.85;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.note-card__actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.save-note-row {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.memory-edit-input {
+  width: 100%;
+  font-size: 0.85rem;
+}
+
+.expert-suggestions {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  opacity: 0.85;
+}
+
+/* Roundtable: live status + per-turn styling */
+.roundtable-status {
+  margin: 0 16px 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  align-self: flex-start;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 0.78rem;
+}
+
+.rounds-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.76rem;
+  opacity: 0.85;
+}
+
+.rounds-field select {
+  padding: 2px 4px;
+  font-size: 0.76rem;
+}
+
+/* A moderator turn is the answer the user reads — give it emphasis. */
+.message.turn-moderator {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+}
+
+/* A pass is information, not content — keep it quiet. */
+.message.turn-pass {
+  opacity: 0.55;
+  font-style: italic;
+}
+
+.message.turn-pass .message__body {
+  font-size: 0.82rem;
+}
+
+/* Drop a document into the conversation */
+.workspace {
+  position: relative;
+}
+
+.workspace--dropping {
+  outline: 2px dashed var(--accent);
+  outline-offset: -8px;
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+
+.drop-overlay__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  padding: 22px 30px;
+  border-radius: 14px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  text-align: center;
+}
+
+.drop-overlay__panel span {
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+
+/* Expert Library gallery */
+.library-modal {
+  max-width: 900px;
+  width: 92vw;
+}
+
+.library-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.library-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.16));
+  background: transparent;
+  color: inherit;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+
+.chip--active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  max-height: 52vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.library-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 12px;
+  background: rgba(127, 127, 127, 0.06);
+}
+
+.library-card__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.library-card__head > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.library-card__icon {
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.library-card__cat {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+}
+
+.library-card__desc {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  opacity: 0.85;
+  flex: 1;
+}
+
+.library-card__actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.library-progress {
+  font-size: 0.76rem;
+  opacity: 0.8;
+  padding: 4px 0;
+}
+
+/* ---- Header overflow ------------------------------------------------------- */
+/* A large consulting panel used to push the banner contents off the window. */
+.workspace__banner {
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.workspace__banner-info {
+  flex: 1 1 220px;
+  overflow: hidden;
+}
+
+.workspace__banner-right {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Long Expert names truncate rather than stretching the row. */
+.specialist-pill-header,
+.model-pill-header {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+
+/* The notice can be long; keep it from monopolising the banner. */
+.notice-badge {
+  max-width: 42vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Call-to-action button ------------------------------------------------- */
+/* Outlined accent, deliberately NOT the filled accent used for a selected /
+   consulting Expert — a filled accent button read as "currently active". */
+.cta-button {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.cta-button:hover {
+  background: var(--accent-soft);
+}
+
+/* Clicking a button must not leave it looking permanently selected. Keyboard
+   focus still gets a clear ring via :focus-visible. */
+button:focus:not(:focus-visible) {
+  outline: none;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---- Audit log panel ------------------------------------------------------- */
+.audit-verify {
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  margin-bottom: 8px;
+}
+
+.audit-verify--ok {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-secondary);
+  color: var(--accent-secondary);
+}
+
+.audit-verify--broken {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.6);
+  color: #f59e0b;
+}
+
+.audit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.audit-count {
+  font-size: 0.74rem;
+  opacity: 0.65;
+  margin-left: auto;
+}
+
+.audit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 0.78rem;
+}
+
+.audit-row {
+  display: grid;
+  grid-template-columns: 48px 150px minmax(120px, auto) 1fr;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.06);
+}
+
+.audit-row--serious {
+  border-left: 2px solid #f59e0b;
+}
+
+.audit-row__seq {
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.audit-row__at {
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+.audit-row__action {
+  font-weight: 600;
+}
+
+.audit-row__detail {
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Lock screen ----------------------------------------------------------- */
+.lock-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-main, #100d0c);
+  z-index: 1000;
+}
+
+.lock-panel {
+  width: min(420px, 90vw);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 28px;
+  border-radius: 16px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-soft);
+  text-align: center;
+}
+
+.lock-panel__brand {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.lock-panel h1 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.lock-panel p {
+  margin: 0;
+  font-size: 0.84rem;
+  opacity: 0.8;
+  line-height: 1.45;
+}
+
+.lock-panel input {
+  width: 100%;
+  text-align: center;
+  font-size: 0.95rem;
+  padding: 10px;
+}
+
+.lock-error {
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  color: #f59e0b;
+}
+
+.lock-hint {
+  font-size: 0.74rem !important;
+  opacity: 0.55 !important;
+  border-top: 1px solid var(--panel-border);
+  padding-top: 10px;
+}
+
+/* ---- Encryption controls --------------------------------------------------- */
+.encryption-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.encryption-controls h3,
+.audit-heading {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.encryption-warning {
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.6);
+  color: #f59e0b;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  opacity: 0.9;
+}
+
+.checkbox-field input {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.lock-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.lock-row__field {
+  flex: 1;
+}
+
+/* ---- Onboarding ------------------------------------------------------------ */
+.onboarding {
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  background: var(--bg-main, #100d0c);
+  padding: 32px 16px;
+  z-index: 900;
+}
+
+.onboarding__panel {
+  width: min(760px, 100%);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.onboarding__brand {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.onboarding__lede {
+  margin: 0;
+  font-size: 0.9rem;
+  opacity: 0.85;
+  line-height: 1.5;
+}
+
+.onboarding__step {
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: var(--panel-soft);
+}
+
+.onboarding__step.is-active {
+  border-color: var(--accent);
+}
+
+.onboarding__step.is-done {
+  opacity: 0.75;
+}
+
+.onboarding__step-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.95rem;
+}
+
+.onboarding__body ol {
+  margin: 8px 0;
+  padding-left: 20px;
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.onboarding__ok,
+.onboarding__hardware,
+.onboarding__footnote {
+  margin: 6px 0 0;
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+.onboarding__required {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
+.onboarding__models {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.onboarding__model {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.05);
+}
+
+.onboarding__model.is-installed {
+  opacity: 0.6;
+}
+
+.onboarding__model.is-tight {
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
+.onboarding__model-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.onboarding__model-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.onboarding__model p {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  opacity: 0.85;
+}
+
+.onboarding__why {
+  opacity: 0.6 !important;
+  font-style: italic;
+}
+
+.onboarding__warn {
+  color: #f59e0b;
+  opacity: 1 !important;
+}
+
+.onboarding__model-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.onboarding__size {
+  font-size: 0.76rem;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+.onboarding__progress {
+  margin-top: 10px;
+}
+
+.onboarding__progress-label {
+  font-size: 0.78rem;
+  opacity: 0.8;
+  margin-bottom: 4px;
+}
+
+.onboarding__bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(127, 127, 127, 0.2);
+  overflow: hidden;
+}
+
+.onboarding__bar > div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 200ms ease;
+}
+
+.onboarding__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ---- Legal notice (Settings → Legal & Limits, and the onboarding summary) ---- */
+.legal-panel {
+  max-width: 70ch;
+  line-height: 1.6;
+}
+
+.legal-panel h3 {
+  margin: 1.4rem 0 0.5rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+}
+
+.legal-panel h3:first-child {
+  margin-top: 0;
+}
+
+.legal-panel p,
+.legal-panel li {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.legal-panel ul,
+.legal-panel ol {
+  margin: 0.5rem 0 0.5rem 1.1rem;
+  padding: 0;
+}
+
+.legal-panel li {
+  margin-bottom: 0.45rem;
+}
+
+.legal-panel strong {
+  color: var(--text-main);
+}
+
+.legal-panel__footnote {
+  margin-top: 1.5rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--panel-border);
+  font-size: 0.82rem;
+  opacity: 0.8;
+}
+
+/* Compact form for first run. Sits above the actions so it is read before the
+   user commits, without becoming a modal wall the user clicks past reflexively. */
+.legal-summary {
+  margin: 1.25rem 0 0;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid var(--panel-border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--panel-soft);
+  color: var(--text-muted);
+  font-size: 0.83rem;
+  line-height: 1.55;
+}
+
+.legal-summary strong {
+  color: var(--text-main);
 }

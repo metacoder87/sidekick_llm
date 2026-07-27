@@ -2,7 +2,10 @@
   "models": {
     "list": "models:list",
     "getActive": "models:getActive",
-    "setActive": "models:setActive"
+    "setActive": "models:setActive",
+    "catalog": "models:catalog",
+    "pull": "models:pull",
+    "hardware": "models:hardware"
   },
   "ollama": {
     "status": "ollama:getStatus"
@@ -16,12 +19,25 @@
     "searchConversations": "chat:searchConversations",
     "sendMessageStream": "chat:sendMessageStream",
     "cancelGeneration": "chat:cancelGeneration",
+    "answerNow": "chat:answerNow",
     "exportConversation": "chat:exportConversation",
     "exportAll": "chat:exportAll",
     "importAll": "chat:importAll"
   },
   "system": {
-    "getIntegrity": "system:getIntegrity"
+    "getIntegrity": "system:getIntegrity",
+    "auditList": "system:auditList",
+    "auditVerify": "system:auditVerify",
+    "auditExport": "system:auditExport"
+  },
+  "security": {
+    "status": "security:status",
+    "unlock": "security:unlock",
+    "lock": "security:lock",
+    "enable": "security:enable",
+    "disable": "security:disable",
+    "changePassphrase": "security:changePassphrase",
+    "setRemember": "security:setRemember"
   },
   "settings": {
     "get": "settings:get",
@@ -30,6 +46,7 @@
   "memory": {
     "list": "memory:list",
     "add": "memory:add",
+    "update": "memory:update",
     "delete": "memory:delete"
   },
   "profile": {
@@ -42,16 +59,32 @@
     "create": "specialist:create",
     "update": "specialist:update",
     "delete": "specialist:delete",
-    "reindex": "specialist:reindex"
+    "reindex": "specialist:reindex",
+    "exportPack": "specialist:exportPack",
+    "importPack": "specialist:importPack",
+    "catalog": "specialist:catalog",
+    "installFromCatalog": "specialist:installFromCatalog"
   },
   "research": {
     "start": "research:start",
-    "ingestFile": "research:ingestFile"
+    "ingestFile": "research:ingestFile",
+    "quickIngest": "research:quickIngest"
+  },
+  "notes": {
+    "list": "notes:list",
+    "create": "notes:create",
+    "update": "notes:update",
+    "delete": "notes:delete"
   },
   "events": {
     "streamUpdate": "events:chat-stream-update",
     "streamComplete": "events:chat-stream-complete",
     "streamError": "events:chat-stream-error",
-    "researchProgress": "events:research-progress"
+    "turnStart": "events:roundtable-turn-start",
+    "turnDelta": "events:roundtable-turn-delta",
+    "turnComplete": "events:roundtable-turn-complete",
+    "researchProgress": "events:research-progress",
+    "locked": "events:security-locked",
+    "modelPull": "events:model-pull"
   }
 }

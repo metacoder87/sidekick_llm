@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { formatTimestamp } from '../lib/format';
 import CitationsList from './CitationsList';
+import SourceCards from './SourceCards';
 
 function FormattedContent({ text }) {
   if (!text) return null;
@@ -41,7 +42,11 @@ function FormattedContent({ text }) {
         if (part.type === 'code') {
           return <CodeBlock key={idx} language={part.language} code={part.content} />;
         }
-        return <p key={idx} className="formatted-paragraph">{part.content}</p>;
+        return (
+          <p key={idx} className="formatted-paragraph">
+            {part.content}
+          </p>
+        );
       })}
     </div>
   );
@@ -71,11 +76,74 @@ function CodeBlock({ language, code }) {
   );
 }
 
-function MessageBubble({ message }) {
+// Turns an answer into durable, retrievable knowledge on one of the consulting
+// Experts — the "create notes from what you found" loop.
+function SaveAsNote({ message, experts, onSaveNote }) {
+  const [target, setTarget] = useState(experts[0]?.id || '');
+  const [state, setState] = useState('idle');
+
+  if (experts.length === 0 || !onSaveNote) return null;
+
+  async function save() {
+    setState('saving');
+    try {
+      const result = await onSaveNote({ hubId: target || experts[0].id, content: message.content });
+      setState(result && result.indexed === false ? 'partial' : 'saved');
+    } catch (_e) {
+      setState('error');
+    }
+  }
+
   return (
-    <article className={`message ${message.role}`}>
+    <div className="save-note-row">
+      {experts.length > 1 ? (
+        <select
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          disabled={state === 'saving'}
+        >
+          {experts.map((expert) => (
+            <option key={expert.id} value={expert.id}>
+              {expert.name}
+            </option>
+          ))}
+        </select>
+      ) : null}
+      <button type="button" className="ghost-button" onClick={save} disabled={state === 'saving'}>
+        {state === 'saved'
+          ? '✓ Saved as note'
+          : state === 'partial'
+            ? '⚠️ Saved, not indexed'
+            : state === 'error'
+              ? 'Save failed — retry'
+              : state === 'saving'
+                ? 'Saving…'
+                : `📝 Save as note${experts.length === 1 ? ` to ${experts[0].name}` : ''}`}
+      </button>
+    </div>
+  );
+}
+
+// In a roundtable, each message is a turn by a named Expert (or the moderator), so
+// the speaker — not "Sidekick" — is what the user needs to see.
+function speakerLabel(message) {
+  if (message.role === 'user') return 'You';
+  if (message.turnKind === 'moderator') return '⚖️ Moderator';
+  if (message.expertName) {
+    const round = message.round ? ` · round ${message.round}` : '';
+    return `⚡ ${message.expertName}${round}`;
+  }
+  return 'Sidekick';
+}
+
+function MessageBubble({ message, experts = [], onSaveNote, onAddExpert }) {
+  const isPass = message.turnKind === 'pass';
+  return (
+    <article
+      className={`message ${message.role}${message.turnKind ? ` turn-${message.turnKind}` : ''}`}
+    >
       <div className="message__meta">
-        <span>{message.role === 'user' ? 'You' : 'Sidekick'}</span>
+        <span>{speakerLabel(message)}</span>
         <span>{formatTimestamp(message.createdAt)}</span>
       </div>
       <div className="message__body">
@@ -91,7 +159,32 @@ function MessageBubble({ message }) {
         <CitationsList citations={message.citations} />
       ) : null}
       {message.role === 'assistant' && message.specialistGrounding ? (
-        <GroundingBadge grounding={message.specialistGrounding} />
+        <>
+          <GroundingBadge grounding={message.specialistGrounding} />
+          <SourceCards sources={message.specialistGrounding.sources} />
+        </>
+      ) : null}
+      {message.role === 'assistant' && message.suggestedExperts && onAddExpert ? (
+        <div className="expert-suggestions">
+          💡 Also relevant:
+          {message.suggestedExperts.map((expert) => (
+            <button
+              key={expert.id}
+              type="button"
+              className="ghost-button"
+              onClick={() => onAddExpert(expert.id)}
+              title={`Add ${expert.name} to the consulting panel and ask again`}
+            >
+              + {expert.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {message.role === 'assistant' &&
+      message.content &&
+      message.status !== 'streaming' &&
+      !isPass ? (
+        <SaveAsNote message={message} experts={experts} onSaveNote={onSaveNote} />
       ) : null}
     </article>
   );
@@ -99,7 +192,9 @@ function MessageBubble({ message }) {
 
 function GroundingBadge({ grounding }) {
   // Back-compat: older single-expert shape was { name, grounded, matches }.
-  const experts = grounding.experts || (grounding.name ? [{ name: grounding.name, matches: grounding.matches }] : []);
+  const experts =
+    grounding.experts ||
+    (grounding.name ? [{ name: grounding.name, matches: grounding.matches }] : []);
   const contributing = experts.filter((e) => (e.matches || 0) > 0);
 
   if (grounding.grounded) {
@@ -114,8 +209,8 @@ function GroundingBadge({ grounding }) {
   const names = experts.map((e) => e.name).join(', ');
   return (
     <div className="grounding-badge grounding-badge--ungrounded">
-      ⚠️ No matching vault knowledge from {names || 'the selected experts'} for this question —
-      this answer is from the model, not cited sources.
+      ⚠️ No matching vault knowledge from {names || 'the selected experts'} for this question — this
+      answer is from the model, not cited sources.
     </div>
   );
 }
@@ -125,6 +220,8 @@ export default function ChatView({
   streamRequestId,
   activeSpecialists = [],
   onExportConversation,
+  onSaveNote,
+  onAddExpert,
 }) {
   if (!conversation) {
     return (
@@ -171,7 +268,13 @@ export default function ChatView({
           </div>
         ) : null}
         {conversation.messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
+          <MessageBubble
+            key={message.id}
+            message={message}
+            experts={activeSpecialists}
+            onSaveNote={onSaveNote}
+            onAddExpert={onAddExpert}
+          />
         ))}
       </div>
     </section>

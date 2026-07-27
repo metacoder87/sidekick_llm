@@ -1,13 +1,17 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const Database = require('better-sqlite3');
-const { randomUUID } = require('node:crypto');
+// Encryption-capable drop-in for better-sqlite3 (same API, same version line) that
+// bundles AES-256 / SQLCipher. With NO key set it reads and writes plain SQLite
+// identically, so adopting the driver changes nothing until a passphrase is
+// configured — encryption stays opt-in (ROADMAP Stage 4).
+const Database = require('better-sqlite3-multiple-ciphers');
+const { randomUUID, createHash } = require('node:crypto');
 
 // The current target schema version. Bump this and append a migration to
 // MIGRATIONS whenever the schema changes. The corpus is the project's asset
 // (see ROADMAP.md §3) — every migration runs behind a backup and an integrity
 // check so a bad upgrade can never destroy user data.
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 8;
 const MAX_BACKUPS = 5;
 
 const DEFAULT_TITLE = 'New conversation';
@@ -27,6 +31,15 @@ const DEFAULT_SETTINGS = {
   // research query generation). Empty = use the active chat model. Lets a user chat
   // with a large model while cheap background tasks run on a small one (invariant #5).
   backgroundModel: '',
+  // Multi-Expert conversation style: 'synthesized' (one blended answer) or
+  // 'roundtable' (each Expert speaks in its own grounded voice, then a moderator
+  // consolidates). See ROADMAP Stage 2.5.
+  panelMode: 'synthesized',
+  // Rounds of Expert turns before the moderator wraps up (roundtable mode).
+  roundtableRounds: '1',
+  // Minutes of inactivity before an encrypted corpus re-locks itself. '0' disables.
+  // Only meaningful when encryption is on — there is nothing to lock otherwise.
+  autoLockMinutes: '0',
 };
 
 const DEFAULT_PROFILE = {
@@ -84,10 +97,7 @@ function normalizeFact(fact) {
 }
 
 function createAutoTitle(content) {
-  return content
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 72) || DEFAULT_TITLE;
+  return content.replace(/\s+/g, ' ').trim().slice(0, 72) || DEFAULT_TITLE;
 }
 
 function toFtsQuery(input) {
@@ -100,10 +110,120 @@ function toFtsQuery(input) {
     .join(' OR ');
 }
 
+// ---- Encryption at rest (opt-in) ------------------------------------------------
+// The driver encrypts the WHOLE database file (AES-256, SQLCipher-compatible), so
+// there is no plaintext left in tables, indexes, FTS or the WAL. Verified behaviour
+// that shapes this code:
+//   * rekey is REJECTED under WAL — the journal mode must be switched to DELETE for
+//     the operation and restored afterwards.
+//   * an encrypted file no longer starts with "SQLite format 3", which is how we
+//     detect encryption WITHOUT needing the key.
+//   * a wrong key and no key both surface as "file is not a database".
+//   * rekey to an empty string decrypts back to plaintext — encryption is
+//     reversible, not a one-way door.
+const SQLITE_MAGIC = 'SQLite format 3';
+
+// Escape a passphrase for use inside a PRAGMA string literal.
+function quoteKey(passphrase) {
+  return `'${String(passphrase).replace(/'/g, "''")}'`;
+}
+
+// Is this database file encrypted? Reads only the header, so it works with no key.
+function isDatabaseEncrypted(filename) {
+  try {
+    if (!filename || filename === ':memory:' || !fs.existsSync(filename)) return false;
+    const fd = fs.openSync(filename, 'r');
+    const header = Buffer.alloc(16);
+    fs.readSync(fd, header, 0, 16, 0);
+    fs.closeSync(fd);
+    // An empty (0-byte) file is a fresh database, not an encrypted one.
+    if (fs.statSync(filename).size === 0) return false;
+    return header.subarray(0, 15).toString('latin1') !== SQLITE_MAGIC;
+  } catch (_error) {
+    return false;
+  }
+}
+
+// Can this passphrase open the database? Used to validate before unlocking.
+function canOpenWithPassphrase(filename, passphrase) {
+  let db = null;
+  try {
+    db = new Database(filename);
+    if (passphrase) db.pragma(`key = ${quoteKey(passphrase)}`);
+    db.prepare('SELECT count(*) FROM sqlite_master').get();
+    return true;
+  } catch (_error) {
+    return false;
+  } finally {
+    try {
+      if (db) db.close();
+    } catch (_e) {
+      /* ignore */
+    }
+  }
+}
+
+// Rekey a CLOSED database file. Handles both directions:
+//   newPassphrase = '<secret>' → encrypt (or change passphrase)
+//   newPassphrase = ''         → decrypt back to plaintext
+// Always takes a backup first: this rewrites every page of the user's corpus.
+function rekeyDatabase({
+  filename,
+  currentPassphrase = '',
+  newPassphrase = '',
+  backupTag = 'rekey',
+}) {
+  if (!fs.existsSync(filename)) {
+    throw new Error('Database file not found.');
+  }
+
+  const encrypted = isDatabaseEncrypted(filename);
+  if (encrypted && !currentPassphrase) {
+    throw new Error('The database is encrypted — the current passphrase is required.');
+  }
+  if (!canOpenWithPassphrase(filename, encrypted ? currentPassphrase : '')) {
+    throw new Error('The current passphrase is incorrect.');
+  }
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = `${filename}.bak-${backupTag}-${stamp}`;
+  fs.copyFileSync(filename, backupPath);
+
+  const db = new Database(filename);
+  try {
+    if (encrypted) db.pragma(`key = ${quoteKey(currentPassphrase)}`);
+    // Rekeying is not supported under WAL; drop to DELETE and restore afterwards.
+    db.pragma('journal_mode = DELETE');
+    db.pragma(`rekey = ${newPassphrase ? quoteKey(newPassphrase) : "''"}`);
+    db.pragma('journal_mode = WAL');
+  } finally {
+    try {
+      db.close();
+    } catch (_e) {
+      /* ignore */
+    }
+  }
+
+  // Verify the result before telling the user it worked.
+  const nowEncrypted = isDatabaseEncrypted(filename);
+  const opens = canOpenWithPassphrase(filename, newPassphrase);
+  if (!opens || nowEncrypted !== Boolean(newPassphrase)) {
+    throw new Error(
+      `Rekey verification failed — your corpus is unchanged at ${backupPath}. Restore that file.`,
+    );
+  }
+
+  return { backupPath, encrypted: nowEncrypted };
+}
+
 class ConversationRepository {
-  constructor(filename) {
+  constructor(filename, { passphrase = null } = {}) {
     this.filename = filename;
     this.db = new Database(filename);
+    // The key must be applied before ANY other statement touches the file.
+    if (passphrase) {
+      this.db.pragma(`key = ${quoteKey(passphrase)}`);
+    }
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
 
@@ -236,14 +356,126 @@ class ConversationRepository {
           this.addColumnIfMissing('message_embeddings', 'embedding_dim', 'INTEGER');
         },
       },
+      {
+        // Citation provenance: where exactly a chunk came from, so a grounded claim
+        // can be traced to a page / character range and deep-linked (ROADMAP Stage 2
+        // — precise verifiable citations, invariants #1/#2). Legacy chunks keep NULLs
+        // and simply render without a precise location.
+        version: 3,
+        up: () => {
+          this.addColumnIfMissing('specialist_chunks', 'location', 'TEXT');
+          this.addColumnIfMissing('specialist_chunks', 'page', 'INTEGER');
+          this.addColumnIfMissing('specialist_chunks', 'char_start', 'INTEGER');
+          this.addColumnIfMissing('specialist_chunks', 'char_end', 'INTEGER');
+          this.addColumnIfMissing('specialist_chunks', 'source_type', 'TEXT');
+        },
+      },
+      {
+        // Hybrid retrieval: an FTS5 index over vault chunks so keyword/BM25 search
+        // can be fused with vector similarity. Pure cosine misses exact terms
+        // (clause numbers, drug names, API symbols) that a lexical index nails.
+        // The table + triggers are created idempotently in initialize(); this
+        // migration backfills any chunks that predate the index.
+        version: 4,
+        up: () => {
+          const hasChunks = this.db
+            .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='specialist_chunks'`)
+            .get();
+          if (!hasChunks) return;
+          this.db.exec(`
+            CREATE VIRTUAL TABLE IF NOT EXISTS specialist_chunk_search USING fts5(
+              chunk_id UNINDEXED,
+              hub_id UNINDEXED,
+              chunk_text
+            );
+            DELETE FROM specialist_chunk_search;
+            INSERT INTO specialist_chunk_search(rowid, chunk_id, hub_id, chunk_text)
+            SELECT rowid, id, hub_id, chunk_text FROM specialist_chunks;
+          `);
+        },
+      },
+      {
+        // Notes: first-class, editable knowledge authored by the user or the model
+        // and attached to an Expert. Unlike ingested documents (which are immutable
+        // sources), a note is the place where the user's own *insight* accumulates —
+        // it is itself embedded into the vault so it becomes retrievable knowledge.
+        version: 5,
+        up: () => {
+          this.db.exec(`
+            CREATE TABLE IF NOT EXISTS notes (
+              id TEXT PRIMARY KEY,
+              hub_id TEXT NOT NULL,
+              title TEXT NOT NULL,
+              body TEXT NOT NULL,
+              author TEXT NOT NULL DEFAULT 'user',
+              source_conversation_id TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              FOREIGN KEY (hub_id) REFERENCES specialist_hubs(id) ON DELETE CASCADE
+            );
+          `);
+        },
+      },
+      {
+        // Memory supersession: when a newer fact replaces an older one ("I use
+        // Windows" → "I switched to Linux"), the old fact is retired rather than
+        // deleted, so the corpus keeps its history while retrieval only sees what is
+        // currently true. `reinforced_count` records how often a fact recurs, which
+        // ranking uses to keep well-established facts ahead of one-off mentions.
+        version: 6,
+        up: () => {
+          this.addColumnIfMissing('user_memories', 'superseded_by', 'TEXT');
+          this.addColumnIfMissing('user_memories', 'superseded_at', 'TEXT');
+          this.addColumnIfMissing('user_memories', 'reinforced_count', 'INTEGER');
+          // Migrations run BEFORE initialize(), so on a fresh database the table
+          // does not exist yet — backfill only when there is something to backfill.
+          const hasTable = this.db
+            .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_memories'`)
+            .get();
+          if (hasTable) {
+            this.db.exec(
+              `UPDATE user_memories SET reinforced_count = 1 WHERE reinforced_count IS NULL`,
+            );
+          }
+        },
+      },
+      {
+        // Roundtable turn attribution: in a deliberation each Expert's contribution
+        // is its own assistant message, so history reloads coherently and every turn
+        // keeps its own citations (ROADMAP Stage 2.5).
+        version: 7,
+        up: () => {
+          this.addColumnIfMissing('messages', 'expert_id', 'TEXT');
+          this.addColumnIfMissing('messages', 'expert_name', 'TEXT');
+          this.addColumnIfMissing('messages', 'round', 'INTEGER');
+          this.addColumnIfMissing('messages', 'turn_kind', 'TEXT');
+        },
+      },
+      {
+        // Append-only audit log of sensitive actions, hash-chained so tampering is
+        // detectable: each entry's hash covers the previous hash, so removing or
+        // editing any entry breaks the chain from that point on. This is the
+        // accountability half of Stage 4 (the other half is encryption at rest).
+        version: 8,
+        up: () => {
+          this.db.exec(`
+            CREATE TABLE IF NOT EXISTS audit_log (
+              seq INTEGER PRIMARY KEY AUTOINCREMENT,
+              at TEXT NOT NULL,
+              action TEXT NOT NULL,
+              detail TEXT,
+              prev_hash TEXT,
+              hash TEXT NOT NULL
+            );
+          `);
+        },
+      },
     ];
 
     // Guard against drift: the migration list must reach the declared version.
     const latest = migrations[migrations.length - 1].version;
     if (latest !== SCHEMA_VERSION) {
-      throw new Error(
-        `Migration list ends at v${latest} but SCHEMA_VERSION is ${SCHEMA_VERSION}.`,
-      );
+      throw new Error(`Migration list ends at v${latest} but SCHEMA_VERSION is ${SCHEMA_VERSION}.`);
     }
 
     const current = this.getSchemaVersion();
@@ -284,6 +516,10 @@ class ConversationRepository {
         role TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant')),
         content TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'complete',
+        expert_id TEXT,
+        expert_name TEXT,
+        round INTEGER,
+        turn_kind TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
       );
@@ -293,6 +529,9 @@ class ConversationRepository {
         fact TEXT NOT NULL,
         category TEXT DEFAULT 'general',
         source_conversation_id TEXT,
+        superseded_by TEXT,
+        superseded_at TEXT,
+        reinforced_count INTEGER DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -338,6 +577,11 @@ class ConversationRepository {
         embedding_json TEXT NOT NULL,
         embedding_model TEXT,
         embedding_dim INTEGER,
+        location TEXT,
+        page INTEGER,
+        char_start INTEGER,
+        char_end INTEGER,
+        source_type TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (hub_id) REFERENCES specialist_hubs(id) ON DELETE CASCADE
       );
@@ -352,6 +596,56 @@ class ConversationRepository {
         conversation_id UNINDEXED,
         title
       );
+
+      -- Append-only, hash-chained audit log of sensitive actions (Stage 4).
+      CREATE TABLE IF NOT EXISTS audit_log (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        at TEXT NOT NULL,
+        action TEXT NOT NULL,
+        detail TEXT,
+        prev_hash TEXT,
+        hash TEXT NOT NULL
+      );
+
+      -- Notes: editable, first-class knowledge attached to an Expert (user- or
+      -- model-authored). Embedded into the vault so insight becomes retrievable.
+      CREATE TABLE IF NOT EXISTS notes (
+        id TEXT PRIMARY KEY,
+        hub_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        author TEXT NOT NULL DEFAULT 'user',
+        source_conversation_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (hub_id) REFERENCES specialist_hubs(id) ON DELETE CASCADE
+      );
+
+      -- Lexical index over Expert vault chunks, for hybrid (BM25 + vector) retrieval.
+      CREATE VIRTUAL TABLE IF NOT EXISTS specialist_chunk_search USING fts5(
+        chunk_id UNINDEXED,
+        hub_id UNINDEXED,
+        chunk_text
+      );
+
+      DROP TRIGGER IF EXISTS specialist_chunks_ai;
+      DROP TRIGGER IF EXISTS specialist_chunks_au;
+      DROP TRIGGER IF EXISTS specialist_chunks_ad;
+
+      CREATE TRIGGER specialist_chunks_ai AFTER INSERT ON specialist_chunks BEGIN
+        INSERT INTO specialist_chunk_search(rowid, chunk_id, hub_id, chunk_text)
+        VALUES (new.rowid, new.id, new.hub_id, new.chunk_text);
+      END;
+
+      CREATE TRIGGER specialist_chunks_au AFTER UPDATE ON specialist_chunks BEGIN
+        DELETE FROM specialist_chunk_search WHERE rowid = old.rowid;
+        INSERT INTO specialist_chunk_search(rowid, chunk_id, hub_id, chunk_text)
+        VALUES (new.rowid, new.id, new.hub_id, new.chunk_text);
+      END;
+
+      CREATE TRIGGER specialist_chunks_ad AFTER DELETE ON specialist_chunks BEGIN
+        DELETE FROM specialist_chunk_search WHERE rowid = old.rowid;
+      END;
 
       DROP TRIGGER IF EXISTS messages_ai;
       DROP TRIGGER IF EXISTS messages_au;
@@ -449,10 +743,12 @@ class ConversationRepository {
     };
 
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO conversations (id, title, created_at, updated_at, last_message_at)
         VALUES (@id, @title, @createdAt, @updatedAt, @lastMessageAt)
-      `)
+      `,
+      )
       .run(conversation);
 
     return conversation;
@@ -460,7 +756,8 @@ class ConversationRepository {
 
   listConversations() {
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           id,
           title,
@@ -470,13 +767,15 @@ class ConversationRepository {
           last_message_at AS lastMessageAt
         FROM conversations
         ORDER BY COALESCE(last_message_at, updated_at) DESC
-      `)
+      `,
+      )
       .all();
   }
 
   getConversationSummary(conversationId) {
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           id,
           title,
@@ -486,18 +785,21 @@ class ConversationRepository {
           last_message_at AS lastMessageAt
         FROM conversations
         WHERE id = ?
-      `)
+      `,
+      )
       .get(conversationId);
   }
 
   updateConversationSummary(conversationId, summary) {
     const timestamp = now();
     this.db
-      .prepare(`
+      .prepare(
+        `
         UPDATE conversations
         SET summary = @summary, updated_at = @timestamp
         WHERE id = @conversationId
-      `)
+      `,
+      )
       .run({ conversationId, summary, timestamp });
   }
 
@@ -513,14 +815,24 @@ class ConversationRepository {
     // it (touch updated_at, adopt a more specific category) instead of inserting a
     // near-duplicate. The table is small, so an in-memory scan is fine.
     const existing = this.db
-      .prepare(`SELECT id, fact, category, source_conversation_id AS sourceConversationId, created_at AS createdAt FROM user_memories`)
+      .prepare(
+        `SELECT id, fact, category, source_conversation_id AS sourceConversationId, created_at AS createdAt FROM user_memories`,
+      )
       .all()
       .find((row) => normalizeFact(row.fact) === norm);
 
     if (existing) {
       const nextCategory = category && category.trim() ? category.trim() : existing.category;
+      // Repeating a fact reinforces it rather than duplicating it — recurrence is
+      // evidence of importance, which ranking uses to favour established facts.
       this.db
-        .prepare(`UPDATE user_memories SET updated_at = ?, category = ? WHERE id = ?`)
+        .prepare(
+          `
+          UPDATE user_memories
+          SET updated_at = ?, category = ?, reinforced_count = COALESCE(reinforced_count, 1) + 1
+          WHERE id = ?
+        `,
+        )
         .run(timestamp, nextCategory, existing.id);
       return {
         id: existing.id,
@@ -543,29 +855,76 @@ class ConversationRepository {
     };
 
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO user_memories (id, fact, category, source_conversation_id, created_at, updated_at)
         VALUES (@id, @fact, @category, @sourceConversationId, @createdAt, @updatedAt)
-      `)
+      `,
+      )
       .run(memory);
 
     return memory;
   }
 
-  listUserMemories() {
+  // Active memories only — superseded facts are retained for history but must never
+  // reach the model, or the assistant would act on knowledge the user has replaced.
+  listUserMemories({ includeSuperseded = false } = {}) {
+    const where = includeSuperseded ? '' : 'WHERE superseded_by IS NULL';
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           id,
           fact,
           category,
           source_conversation_id AS sourceConversationId,
+          superseded_by AS supersededBy,
+          superseded_at AS supersededAt,
+          COALESCE(reinforced_count, 1) AS reinforcedCount,
           created_at AS createdAt,
           updated_at AS updatedAt
         FROM user_memories
+        ${where}
         ORDER BY updated_at DESC
-      `)
+      `,
+      )
       .all();
+  }
+
+  updateUserMemory({ id, fact, category }) {
+    const timestamp = now();
+    this.db
+      .prepare(
+        `
+        UPDATE user_memories
+        SET fact = COALESCE(@fact, fact),
+            category = COALESCE(@category, category),
+            updated_at = @timestamp
+        WHERE id = @id
+      `,
+      )
+      .run({ id, fact: fact ?? null, category: category ?? null, timestamp });
+    return this.db
+      .prepare(
+        `
+        SELECT id, fact, category, source_conversation_id AS sourceConversationId,
+               superseded_by AS supersededBy, COALESCE(reinforced_count, 1) AS reinforcedCount,
+               created_at AS createdAt, updated_at AS updatedAt
+        FROM user_memories WHERE id = ?
+      `,
+      )
+      .get(id);
+  }
+
+  // Retire `oldId` in favour of `newId`. The old fact stays on record (auditable)
+  // but is excluded from retrieval.
+  supersedeUserMemory(oldId, newId) {
+    const result = this.db
+      .prepare(
+        `UPDATE user_memories SET superseded_by = ?, superseded_at = ? WHERE id = ? AND superseded_by IS NULL`,
+      )
+      .run(newId, now(), oldId);
+    return result.changes > 0;
   }
 
   deleteUserMemory(id) {
@@ -580,12 +939,23 @@ class ConversationRepository {
     const embeddingJson = JSON.stringify(embedding);
 
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO message_embeddings
           (id, message_id, conversation_id, chunk_text, embedding_json, embedding_model, embedding_dim, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(id, messageId, conversationId, chunkText, embeddingJson, embeddingModel, embedding.length, timestamp);
+      `,
+      )
+      .run(
+        id,
+        messageId,
+        conversationId,
+        chunkText,
+        embeddingJson,
+        embeddingModel,
+        embedding.length,
+        timestamp,
+      );
   }
 
   searchVectorMemory(queryEmbedding, limit = 5, currentConversationId = null) {
@@ -601,19 +971,23 @@ class ConversationRepository {
     let rows;
     if (currentConversationId) {
       rows = this.db
-        .prepare(`
+        .prepare(
+          `
           SELECT conversation_id, chunk_text, embedding_json
           FROM message_embeddings
           WHERE conversation_id != ? AND embedding_dim = ?
-        `)
+        `,
+        )
         .all(currentConversationId, dim);
     } else {
       rows = this.db
-        .prepare(`
+        .prepare(
+          `
           SELECT conversation_id, chunk_text, embedding_json
           FROM message_embeddings
           WHERE embedding_dim = ?
-        `)
+        `,
+        )
         .all(dim);
     }
 
@@ -641,18 +1015,24 @@ class ConversationRepository {
 
   listMessages(conversationId) {
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           id,
           conversation_id AS conversationId,
           role,
           content,
           status,
+          expert_id AS expertId,
+          expert_name AS expertName,
+          round,
+          turn_kind AS turnKind,
           created_at AS createdAt
         FROM messages
         WHERE conversation_id = ?
         ORDER BY created_at ASC, rowid ASC
-      `)
+      `,
+      )
       .all(conversationId);
   }
 
@@ -668,7 +1048,18 @@ class ConversationRepository {
     };
   }
 
-  addMessage({ conversationId, role, content, status = 'complete' }) {
+  addMessage({
+    conversationId,
+    role,
+    content,
+    status = 'complete',
+    // Roundtable attribution: which Expert spoke, in which round, and whether this
+    // was an Expert turn or the moderator's synthesis (null for ordinary chat).
+    expertId = null,
+    expertName = null,
+    round = null,
+    turnKind = null,
+  }) {
     const timestamp = now();
     const message = {
       id: randomUUID(),
@@ -676,24 +1067,33 @@ class ConversationRepository {
       role,
       content: content.trim(),
       status,
+      expertId,
+      expertName,
+      round,
+      turnKind,
       createdAt: timestamp,
     };
 
     this.db
-      .prepare(`
-        INSERT INTO messages (id, conversation_id, role, content, status, created_at)
-        VALUES (@id, @conversationId, @role, @content, @status, @createdAt)
-      `)
+      .prepare(
+        `
+        INSERT INTO messages
+          (id, conversation_id, role, content, status, expert_id, expert_name, round, turn_kind, created_at)
+        VALUES (@id, @conversationId, @role, @content, @status, @expertId, @expertName, @round, @turnKind, @createdAt)
+      `,
+      )
       .run(message);
 
     this.db
-      .prepare(`
+      .prepare(
+        `
         UPDATE conversations
         SET
           updated_at = @timestamp,
           last_message_at = @timestamp
         WHERE id = @conversationId
-      `)
+      `,
+      )
       .run({ conversationId, timestamp });
 
     return message;
@@ -718,22 +1118,22 @@ class ConversationRepository {
 
     const timestamp = now();
     this.db
-      .prepare(`
+      .prepare(
+        `
         UPDATE conversations
         SET
           title = @title,
           updated_at = @timestamp
         WHERE id = @conversationId
-      `)
+      `,
+      )
       .run({ conversationId, title: trimmedTitle, timestamp });
 
     return this.getConversationSummary(conversationId);
   }
 
   deleteConversation(conversationId) {
-    const result = this.db
-      .prepare(`DELETE FROM conversations WHERE id = ?`)
-      .run(conversationId);
+    const result = this.db.prepare(`DELETE FROM conversations WHERE id = ?`).run(conversationId);
 
     return result.changes > 0;
   }
@@ -747,7 +1147,8 @@ class ConversationRepository {
     const ftsQuery = toFtsQuery(trimmedQuery);
     try {
       return this.db
-        .prepare(`
+        .prepare(
+          `
           WITH ranked_results AS (
             SELECT
               c.id,
@@ -785,11 +1186,13 @@ class ConversationRepository {
           FROM ranked_results
           GROUP BY id
           ORDER BY MIN(rank), COALESCE(lastMessageAt, updatedAt) DESC
-        `)
+        `,
+        )
         .all({ ftsQuery });
-    } catch (error) {
+    } catch (_error) {
       return this.db
-        .prepare(`
+        .prepare(
+          `
           SELECT
             c.id,
             c.title,
@@ -802,7 +1205,8 @@ class ConversationRepository {
           WHERE c.title LIKE @likeQuery OR m.content LIKE @likeQuery
           GROUP BY c.id
           ORDER BY COALESCE(c.last_message_at, c.updated_at) DESC
-        `)
+        `,
+        )
         .all({ likeQuery: `%${trimmedQuery}%` });
     }
   }
@@ -846,9 +1250,142 @@ class ConversationRepository {
   }
 
   // Raw chunk rows for a hub, including the stored embedding JSON, for export.
+  // ---- Expert Packs --------------------------------------------------------------
+  // A portable, versioned export of ONE Expert: persona, vault chunks (with their
+  // citation provenance), and notes. Shareable, backup-able, and the unit a
+  // marketplace would distribute (ROADMAP §5a / Stage 7).
+  //
+  // The manifest records which embedding model built the vectors, because importing
+  // a pack onto a machine using a different embedding model yields chunks that are
+  // present but unretrievable — the exact silent failure the embedding contract
+  // exists to prevent. Import surfaces the mismatch and offers a re-index.
+  exportExpertPack(hubId) {
+    const hub = this.getSpecialistHub(hubId);
+    if (!hub) {
+      return null;
+    }
+
+    const chunks = this.listSpecialistChunksForExport(hubId);
+    const embeddingModels = [...new Set(chunks.map((c) => c.embeddingModel).filter(Boolean))];
+
+    return {
+      app: 'sidekick-llm',
+      kind: 'expert-pack',
+      packVersion: 1,
+      schemaVersion: this.getSchemaVersion(),
+      exportedAt: now(),
+      manifest: {
+        name: hub.name,
+        chunkCount: chunks.length,
+        noteCount: this.countNotes(hubId),
+        embeddingModels,
+        // Distinct source documents/URLs, so a recipient can see what it was built
+        // from before importing it.
+        sources: [...new Set(chunks.map((c) => c.sourceTitle).filter(Boolean))].slice(0, 200),
+      },
+      expert: {
+        name: hub.name,
+        description: hub.description,
+        systemPrompt: hub.systemPrompt,
+        icon: hub.icon,
+      },
+      chunks,
+      notes: this.listNotes(hubId),
+    };
+  }
+
+  // Installs a pack as a NEW Expert. Ids are regenerated so a pack can be installed
+  // more than once and can never collide with an existing Expert.
+  importExpertPack(pack, { nameSuffix = '' } = {}) {
+    if (!pack || pack.app !== 'sidekick-llm' || pack.kind !== 'expert-pack') {
+      throw new Error('That file is not a Sidekick Expert Pack.');
+    }
+    if (!pack.expert || !pack.expert.name) {
+      throw new Error('Expert Pack is missing its expert definition.');
+    }
+
+    const currentEmbeddingModel = this.getSetting('embeddingModel');
+    const packModels = (pack.manifest && pack.manifest.embeddingModels) || [];
+    const retrievable = packModels.length === 0 || packModels.includes(currentEmbeddingModel);
+
+    const hub = this.createSpecialistHub({
+      name: `${pack.expert.name}${nameSuffix}`,
+      description: pack.expert.description || '',
+      systemPrompt: pack.expert.systemPrompt || '',
+      icon: pack.expert.icon || 'brain',
+    });
+
+    const insertChunk = this.db.prepare(`
+      INSERT INTO specialist_chunks
+        (id, hub_id, source_title, source_url, chunk_text, embedding_json, embedding_model, embedding_dim,
+         location, page, char_start, char_end, source_type, created_at)
+      VALUES (@id, @hubId, @sourceTitle, @sourceUrl, @chunkText, @embeddingJson, @embeddingModel, @embeddingDim,
+         @location, @page, @charStart, @charEnd, @sourceType, @createdAt)
+    `);
+    const insertNote = this.db.prepare(`
+      INSERT INTO notes (id, hub_id, title, body, author, source_conversation_id, created_at, updated_at)
+      VALUES (@id, @hubId, @title, @body, @author, NULL, @createdAt, @updatedAt)
+    `);
+
+    let chunksImported = 0;
+    let notesImported = 0;
+    const timestamp = now();
+
+    const run = this.db.transaction(() => {
+      for (const chunk of pack.chunks || []) {
+        if (!chunk.chunkText || !chunk.embeddingJson) continue;
+        insertChunk.run({
+          id: randomUUID(),
+          hubId: hub.id,
+          sourceTitle: chunk.sourceTitle || 'Imported source',
+          sourceUrl: chunk.sourceUrl || '',
+          chunkText: chunk.chunkText,
+          embeddingJson: chunk.embeddingJson,
+          embeddingModel: chunk.embeddingModel ?? null,
+          embeddingDim: chunk.embeddingDim ?? null,
+          location: chunk.location ?? null,
+          page: chunk.page ?? null,
+          charStart: chunk.charStart ?? null,
+          charEnd: chunk.charEnd ?? null,
+          sourceType: chunk.sourceType ?? null,
+          createdAt: chunk.createdAt || timestamp,
+        });
+        chunksImported += 1;
+      }
+
+      for (const note of pack.notes || []) {
+        if (!note.body) continue;
+        insertNote.run({
+          id: randomUUID(),
+          hubId: hub.id,
+          title: note.title || note.body.slice(0, 60),
+          body: note.body,
+          author: note.author || 'user',
+          createdAt: note.createdAt || timestamp,
+          updatedAt: note.updatedAt || timestamp,
+        });
+        notesImported += 1;
+      }
+    });
+
+    run();
+
+    return {
+      hub: this.getSpecialistHub(hub.id),
+      chunksImported,
+      notesImported,
+      // Honest reporting: say plainly when the imported vault will not retrieve
+      // until it is re-indexed with the local embedding model.
+      retrievable,
+      packEmbeddingModels: packModels,
+      currentEmbeddingModel,
+    };
+  }
+
   listSpecialistChunksForExport(hubId) {
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           id,
           hub_id AS hubId,
@@ -858,11 +1395,17 @@ class ConversationRepository {
           embedding_json AS embeddingJson,
           embedding_model AS embeddingModel,
           embedding_dim AS embeddingDim,
+          location,
+          page,
+          char_start AS charStart,
+          char_end AS charEnd,
+          source_type AS sourceType,
           created_at AS createdAt
         FROM specialist_chunks
         WHERE hub_id = ?
         ORDER BY created_at ASC
-      `)
+      `,
+      )
       .all(hubId);
   }
 
@@ -876,7 +1419,13 @@ class ConversationRepository {
       throw new Error('Import payload is not a valid object.');
     }
 
-    const counts = { conversations: 0, messages: 0, userMemories: 0, specialistHubs: 0, specialistChunks: 0 };
+    const counts = {
+      conversations: 0,
+      messages: 0,
+      userMemories: 0,
+      specialistHubs: 0,
+      specialistChunks: 0,
+    };
 
     const insertConversation = this.db.prepare(`
       INSERT OR IGNORE INTO conversations (id, title, summary, created_at, updated_at, last_message_at)
@@ -896,8 +1445,10 @@ class ConversationRepository {
     `);
     const insertChunk = this.db.prepare(`
       INSERT OR IGNORE INTO specialist_chunks
-        (id, hub_id, source_title, source_url, chunk_text, embedding_json, embedding_model, embedding_dim, created_at)
-      VALUES (@id, @hubId, @sourceTitle, @sourceUrl, @chunkText, @embeddingJson, @embeddingModel, @embeddingDim, @createdAt)
+        (id, hub_id, source_title, source_url, chunk_text, embedding_json, embedding_model, embedding_dim,
+         location, page, char_start, char_end, source_type, created_at)
+      VALUES (@id, @hubId, @sourceTitle, @sourceUrl, @chunkText, @embeddingJson, @embeddingModel, @embeddingDim,
+         @location, @page, @charStart, @charEnd, @sourceType, @createdAt)
     `);
     const insertProfile = this.db.prepare(`
       INSERT INTO user_profile (key, value) VALUES (?, ?)
@@ -963,6 +1514,11 @@ class ConversationRepository {
             embeddingJson: chunk.embeddingJson,
             embeddingModel: chunk.embeddingModel ?? null,
             embeddingDim: chunk.embeddingDim ?? null,
+            location: chunk.location ?? null,
+            page: chunk.page ?? null,
+            charStart: chunk.charStart ?? null,
+            charEnd: chunk.charEnd ?? null,
+            sourceType: chunk.sourceType ?? null,
             createdAt: chunk.createdAt,
           });
           counts.specialistChunks += cres.changes;
@@ -996,11 +1552,13 @@ class ConversationRepository {
 
   setSetting(key, value) {
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO settings (key, value)
         VALUES (?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
-      `)
+      `,
+      )
       .run(key, String(value));
   }
 
@@ -1039,7 +1597,8 @@ class ConversationRepository {
   listSpecialistHubs() {
     const embeddingModel = this.getSetting('embeddingModel');
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           h.id,
           h.name,
@@ -1053,13 +1612,15 @@ class ConversationRepository {
              WHERE sc.hub_id = h.id AND sc.embedding_model = @embeddingModel) AS retrievableChunkCount
         FROM specialist_hubs h
         ORDER BY h.updated_at DESC
-      `)
+      `,
+      )
       .all({ embeddingModel });
   }
 
   getSpecialistHub(id) {
     const hub = this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT
           id,
           name,
@@ -1070,7 +1631,8 @@ class ConversationRepository {
           updated_at AS updatedAt
         FROM specialist_hubs
         WHERE id = ?
-      `)
+      `,
+      )
       .get(id);
     if (!hub) return null;
     const embeddingModel = this.getSetting('embeddingModel');
@@ -1078,7 +1640,9 @@ class ConversationRepository {
       .prepare(`SELECT COUNT(*) as count FROM specialist_chunks WHERE hub_id = ?`)
       .get(id).count;
     const retrievableChunkCount = this.db
-      .prepare(`SELECT COUNT(*) as count FROM specialist_chunks WHERE hub_id = ? AND embedding_model = ?`)
+      .prepare(
+        `SELECT COUNT(*) as count FROM specialist_chunks WHERE hub_id = ? AND embedding_model = ?`,
+      )
       .get(id, embeddingModel).count;
     return { ...hub, chunkCount, retrievableChunkCount };
   }
@@ -1096,10 +1660,12 @@ class ConversationRepository {
     };
 
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO specialist_hubs (id, name, description, system_prompt, icon, created_at, updated_at)
         VALUES (@id, @name, @description, @systemPrompt, @icon, @createdAt, @updatedAt)
-      `)
+      `,
+      )
       .run(hub);
 
     return { ...hub, chunkCount: 0 };
@@ -1108,7 +1674,8 @@ class ConversationRepository {
   updateSpecialistHub({ id, name, description, systemPrompt, icon }) {
     const timestamp = now();
     this.db
-      .prepare(`
+      .prepare(
+        `
         UPDATE specialist_hubs
         SET
           name = COALESCE(@name, name),
@@ -1117,7 +1684,8 @@ class ConversationRepository {
           icon = COALESCE(@icon, icon),
           updated_at = @timestamp
         WHERE id = @id
-      `)
+      `,
+      )
       .run({ id, name, description, systemPrompt, icon, timestamp });
 
     return this.getSpecialistHub(id);
@@ -1128,24 +1696,53 @@ class ConversationRepository {
     return result.changes > 0;
   }
 
-  saveSpecialistChunk({ hubId, sourceTitle, sourceUrl = '', chunkText, embedding, embeddingModel = null }) {
+  saveSpecialistChunk({
+    hubId,
+    sourceTitle,
+    sourceUrl = '',
+    chunkText,
+    embedding,
+    embeddingModel = null,
+    // Citation provenance (optional; legacy/unknown sources pass none).
+    location = null,
+    page = null,
+    charStart = null,
+    charEnd = null,
+    sourceType = null,
+  }) {
     assertValidEmbedding(embedding);
     const timestamp = now();
     const id = randomUUID();
     const embeddingJson = JSON.stringify(embedding);
 
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO specialist_chunks
-          (id, hub_id, source_title, source_url, chunk_text, embedding_json, embedding_model, embedding_dim, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(id, hubId, sourceTitle, sourceUrl, chunkText, embeddingJson, embeddingModel, embedding.length, timestamp);
+          (id, hub_id, source_title, source_url, chunk_text, embedding_json, embedding_model, embedding_dim,
+           location, page, char_start, char_end, source_type, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      )
+      .run(
+        id,
+        hubId,
+        sourceTitle,
+        sourceUrl,
+        chunkText,
+        embeddingJson,
+        embeddingModel,
+        embedding.length,
+        location,
+        page,
+        charStart,
+        charEnd,
+        sourceType,
+        timestamp,
+      );
 
     // Update hub timestamp
-    this.db
-      .prepare(`UPDATE specialist_hubs SET updated_at = ? WHERE id = ?`)
-      .run(timestamp, hubId);
+    this.db.prepare(`UPDATE specialist_hubs SET updated_at = ? WHERE id = ?`).run(timestamp, hubId);
   }
 
   // Chunks that need re-embedding for the given (current) model: everything not
@@ -1153,13 +1750,15 @@ class ConversationRepository {
   // configured model. Returns id + chunk_text so the worker can re-embed in place.
   listChunksForReindex(hubId, embeddingModel) {
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT id, chunk_text AS chunkText
         FROM specialist_chunks
         WHERE hub_id = ?
           AND (embedding_model IS NULL OR embedding_model != ?)
         ORDER BY created_at ASC
-      `)
+      `,
+      )
       .all(hubId, embeddingModel);
   }
 
@@ -1168,12 +1767,257 @@ class ConversationRepository {
   updateChunkEmbedding(chunkId, embedding, embeddingModel) {
     assertValidEmbedding(embedding);
     this.db
-      .prepare(`
+      .prepare(
+        `
         UPDATE specialist_chunks
         SET embedding_json = ?, embedding_model = ?, embedding_dim = ?
         WHERE id = ?
-      `)
+      `,
+      )
       .run(JSON.stringify(embedding), embeddingModel, embedding.length, chunkId);
+  }
+
+  // ---- Audit log ----------------------------------------------------------------
+  // Append-only record of sensitive actions. Each row's hash covers the previous
+  // row's hash, so deleting or editing any entry breaks verification from that point
+  // forward — the log is tamper-EVIDENT (you can tell), not tamper-proof (you cannot
+  // be prevented). That is the honest guarantee, and it is what a compliance story
+  // actually needs.
+  appendAudit({ action, detail = null }) {
+    if (!action) return null;
+    try {
+      const at = now();
+      const prev = this.db.prepare(`SELECT hash FROM audit_log ORDER BY seq DESC LIMIT 1`).get();
+      const prevHash = prev ? prev.hash : '';
+      const payload = `${prevHash}|${at}|${action}|${detail == null ? '' : String(detail)}`;
+      const hash = createHash('sha256').update(payload).digest('hex');
+
+      this.db
+        .prepare(
+          `
+          INSERT INTO audit_log (at, action, detail, prev_hash, hash)
+          VALUES (?, ?, ?, ?, ?)
+        `,
+        )
+        .run(at, action, detail == null ? null : String(detail), prevHash || null, hash);
+
+      return { at, action, detail, hash };
+    } catch (error) {
+      // Auditing must never break the action it is recording.
+      console.error('Audit append failed:', error.message);
+      return null;
+    }
+  }
+
+  listAudit({ limit = 200, offset = 0 } = {}) {
+    return this.db
+      .prepare(
+        `
+        SELECT seq, at, action, detail, prev_hash AS prevHash, hash
+        FROM audit_log
+        ORDER BY seq DESC
+        LIMIT @limit OFFSET @offset
+      `,
+      )
+      .all({ limit, offset });
+  }
+
+  countAudit() {
+    return this.db.prepare(`SELECT COUNT(*) AS count FROM audit_log`).get().count;
+  }
+
+  // Recomputes the chain from the beginning. Returns the first sequence number where
+  // the log stops verifying, or null when the whole chain is intact.
+  verifyAuditChain() {
+    const rows = this.db
+      .prepare(
+        `SELECT seq, at, action, detail, prev_hash AS prevHash, hash FROM audit_log ORDER BY seq ASC`,
+      )
+      .all();
+
+    let expectedPrev = '';
+    for (const row of rows) {
+      const payload = `${expectedPrev}|${row.at}|${row.action}|${row.detail == null ? '' : row.detail}`;
+      const hash = createHash('sha256').update(payload).digest('hex');
+      if (hash !== row.hash || (row.prevHash || '') !== expectedPrev) {
+        return { ok: false, entries: rows.length, brokenAt: row.seq };
+      }
+      expectedPrev = row.hash;
+    }
+
+    return { ok: true, entries: rows.length, brokenAt: null };
+  }
+
+  // ---- Notes -------------------------------------------------------------------
+  // A note is an editable source document owned by the user. Its retrievable
+  // projection lives in specialist_chunks (source_type='note', source_url
+  // 'note://<id>'), which the worker rebuilds whenever the note text changes.
+
+  createNote({ hubId, title, body, author = 'user', conversationId = null }) {
+    const trimmedBody = (body || '').trim();
+    if (!trimmedBody) {
+      throw new Error('Note body cannot be empty.');
+    }
+    const timestamp = now();
+    const note = {
+      id: randomUUID(),
+      hubId,
+      title: (title || '').trim() || trimmedBody.slice(0, 60),
+      body: trimmedBody,
+      author,
+      sourceConversationId: conversationId,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+
+    this.db
+      .prepare(
+        `
+        INSERT INTO notes (id, hub_id, title, body, author, source_conversation_id, created_at, updated_at)
+        VALUES (@id, @hubId, @title, @body, @author, @sourceConversationId, @createdAt, @updatedAt)
+      `,
+      )
+      .run(note);
+
+    this.db.prepare(`UPDATE specialist_hubs SET updated_at = ? WHERE id = ?`).run(timestamp, hubId);
+    return note;
+  }
+
+  listNotes(hubId) {
+    return this.db
+      .prepare(
+        `
+        SELECT
+          id, hub_id AS hubId, title, body, author,
+          source_conversation_id AS sourceConversationId,
+          created_at AS createdAt, updated_at AS updatedAt
+        FROM notes
+        WHERE hub_id = ?
+        ORDER BY updated_at DESC
+      `,
+      )
+      .all(hubId);
+  }
+
+  getNote(id) {
+    return this.db
+      .prepare(
+        `
+        SELECT
+          id, hub_id AS hubId, title, body, author,
+          source_conversation_id AS sourceConversationId,
+          created_at AS createdAt, updated_at AS updatedAt
+        FROM notes WHERE id = ?
+      `,
+      )
+      .get(id);
+  }
+
+  updateNote({ id, title, body }) {
+    const timestamp = now();
+    this.db
+      .prepare(
+        `
+        UPDATE notes
+        SET title = COALESCE(@title, title),
+            body = COALESCE(@body, body),
+            updated_at = @timestamp
+        WHERE id = @id
+      `,
+      )
+      .run({ id, title: title ?? null, body: body ?? null, timestamp });
+    return this.getNote(id);
+  }
+
+  // Removing a note also removes its retrievable chunks, so deleted insight stops
+  // influencing answers immediately.
+  deleteNote(id) {
+    const note = this.getNote(id);
+    if (!note) return false;
+    this.deleteNoteChunks(id);
+    const result = this.db.prepare(`DELETE FROM notes WHERE id = ?`).run(id);
+    return result.changes > 0;
+  }
+
+  deleteNoteChunks(noteId) {
+    this.db.prepare(`DELETE FROM specialist_chunks WHERE source_url = ?`).run(`note://${noteId}`);
+  }
+
+  countNotes(hubId) {
+    return this.db.prepare(`SELECT COUNT(*) AS count FROM notes WHERE hub_id = ?`).get(hubId).count;
+  }
+
+  // Broad sample of a hub's chunks for aggregation ("what does this Expert say about
+  // X overall?"). Top-k similarity cannot survey a corpus — it returns the k most
+  // similar passages, not a representative spread — so aggregation walks the whole
+  // vault. Evenly strided so the sample spans the corpus rather than one document.
+  sampleHubChunks(hubId, maxChunks = 60) {
+    const total = this.db
+      .prepare(`SELECT COUNT(*) AS count FROM specialist_chunks WHERE hub_id = ?`)
+      .get(hubId).count;
+    if (total === 0) return { total: 0, chunks: [] };
+
+    const stride = Math.max(1, Math.ceil(total / maxChunks));
+    const chunks = this.db
+      .prepare(
+        `
+        SELECT chunk_text AS chunkText, source_title AS sourceTitle, source_url AS sourceUrl,
+               location, page, source_type AS sourceType
+        FROM (
+          SELECT *, ROW_NUMBER() OVER (ORDER BY source_title, page, char_start, rowid) AS rn
+          FROM specialist_chunks WHERE hub_id = ?
+        )
+        WHERE (rn - 1) % @stride = 0
+        LIMIT @maxChunks
+      `,
+      )
+      .all(hubId, { stride, maxChunks });
+
+    return { total, chunks };
+  }
+
+  // Lexical (BM25) search over a hub's chunks. Complements vector search: exact
+  // terms — clause numbers, drug names, API symbols, error codes — are precisely
+  // what embeddings blur and what BM25 nails. Returns the same shape as the vector
+  // search so the two can be fused (see electron/retrieval.cjs fuseHybrid).
+  searchSpecialistKeyword(hubId, query, limit = 8) {
+    if (!hubId || !query || !query.trim()) {
+      return [];
+    }
+
+    const ftsQuery = toFtsQuery(query);
+    if (!ftsQuery) return [];
+
+    try {
+      return this.db
+        .prepare(
+          `
+          SELECT
+            c.id AS chunkId,
+            c.hub_id AS hubId,
+            c.source_title AS sourceTitle,
+            c.source_url AS sourceUrl,
+            c.chunk_text AS chunkText,
+            c.location,
+            c.page,
+            c.char_start AS charStart,
+            c.char_end AS charEnd,
+            c.source_type AS sourceType,
+            bm25(specialist_chunk_search) AS rank
+          FROM specialist_chunk_search
+          JOIN specialist_chunks c ON c.id = specialist_chunk_search.chunk_id
+          WHERE specialist_chunk_search MATCH @ftsQuery
+            AND specialist_chunk_search.hub_id = @hubId
+          ORDER BY rank
+          LIMIT @limit
+        `,
+        )
+        .all({ ftsQuery, hubId, limit });
+    } catch (_error) {
+      // A malformed FTS expression must never break retrieval; vector search alone
+      // still answers.
+      return [];
+    }
   }
 
   searchSpecialistVectorMemory(hubId, queryEmbedding, limit = 5, embeddingModel = null) {
@@ -1186,20 +2030,26 @@ class ConversationRepository {
     // lives in a different vector space and its similarity would be meaningless
     // even at the same dimension (invariant #4).
     const dim = queryEmbedding.length;
+    const columns = `id, hub_id, source_title, source_url, chunk_text, embedding_json,
+                     location, page, char_start, char_end, source_type`;
     const rows = embeddingModel
       ? this.db
-          .prepare(`
-            SELECT hub_id, source_title, source_url, chunk_text, embedding_json
+          .prepare(
+            `
+            SELECT ${columns}
             FROM specialist_chunks
             WHERE hub_id = ? AND embedding_dim = ? AND embedding_model = ?
-          `)
+          `,
+          )
           .all(hubId, dim, embeddingModel)
       : this.db
-          .prepare(`
-            SELECT hub_id, source_title, source_url, chunk_text, embedding_json
+          .prepare(
+            `
+            SELECT ${columns}
             FROM specialist_chunks
             WHERE hub_id = ? AND embedding_dim = ?
-          `)
+          `,
+          )
           .all(hubId, dim);
 
     const scored = rows
@@ -1208,10 +2058,18 @@ class ConversationRepository {
           const vec = JSON.parse(row.embedding_json);
           const score = cosineSimilarity(queryEmbedding, vec);
           return {
+            chunkId: row.id,
             hubId: row.hub_id,
             sourceTitle: row.source_title,
             sourceUrl: row.source_url,
             chunkText: row.chunk_text,
+            // Citation provenance — carried through so source cards can be rendered
+            // from the retrieved chunk itself rather than parsed out of model text.
+            location: row.location,
+            page: row.page,
+            charStart: row.char_start,
+            charEnd: row.char_end,
+            sourceType: row.source_type,
             score,
           };
         } catch (_e) {
@@ -1227,7 +2085,6 @@ class ConversationRepository {
   }
 
   updateMessageContent(messageId, newContent) {
-    const timestamp = now();
     this.db
       .prepare(`UPDATE messages SET content = ? WHERE id = ?`)
       .run(newContent.trim(), messageId);
@@ -1248,11 +2105,12 @@ class ConversationRepository {
 
 module.exports = {
   ConversationRepository,
+  isDatabaseEncrypted,
+  canOpenWithPassphrase,
+  rekeyDatabase,
   DEFAULT_TITLE,
   DEFAULT_SETTINGS,
   DEFAULT_PROFILE,
   SCHEMA_VERSION,
   createAutoTitle,
 };
-
-

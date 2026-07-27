@@ -145,6 +145,104 @@ test('repository de-duplicates near-identical memories instead of accumulating t
   repository.close();
 });
 
+test('audit log records actions in a hash chain that verifies', () => {
+  const repository = new ConversationRepository(':memory:');
+
+  repository.appendAudit({ action: 'corpus.export', detail: '/tmp/a.json' });
+  repository.appendAudit({ action: 'expert.delete', detail: 'Legal Expert' });
+  repository.appendAudit({ action: 'settings.set', detail: 'tavilyApiKey=<redacted>' });
+
+  const entries = repository.listAudit();
+  assert.equal(entries.length, 3);
+  // Newest first, and each entry links to the previous one.
+  assert.equal(entries[0].action, 'settings.set');
+  assert.equal(entries[0].prevHash, entries[1].hash);
+  assert.equal(repository.countAudit(), 3);
+
+  const verification = repository.verifyAuditChain();
+  assert.equal(verification.ok, true);
+  assert.equal(verification.entries, 3);
+  assert.equal(verification.brokenAt, null);
+
+  repository.close();
+});
+
+test('audit log detects tampering — edited and deleted entries both break the chain', () => {
+  const repository = new ConversationRepository(':memory:');
+  for (const action of ['app.open', 'corpus.export', 'expert.delete', 'note.delete']) {
+    repository.appendAudit({ action, detail: `${action} detail` });
+  }
+  assert.equal(repository.verifyAuditChain().ok, true);
+
+  // Someone edits an entry in place to hide what they did.
+  repository.db.prepare(`UPDATE audit_log SET detail = 'innocuous' WHERE seq = 2`).run();
+  const edited = repository.verifyAuditChain();
+  assert.equal(edited.ok, false);
+  assert.equal(edited.brokenAt, 2, 'verification should point at the altered entry');
+
+  repository.close();
+
+  // Someone deletes an entry entirely.
+  const second = new ConversationRepository(':memory:');
+  for (const action of ['app.open', 'corpus.export', 'expert.delete']) {
+    second.appendAudit({ action, detail: 'd' });
+  }
+  second.db.prepare(`DELETE FROM audit_log WHERE seq = 2`).run();
+  const deleted = second.verifyAuditChain();
+  assert.equal(deleted.ok, false, 'a removed entry must break the chain');
+  second.close();
+});
+
+test('audit append never throws and never blocks the action it records', () => {
+  const repository = new ConversationRepository(':memory:');
+  // Missing action is ignored rather than raising into the caller's code path.
+  assert.equal(repository.appendAudit({}), null);
+  assert.equal(repository.appendAudit({ action: '' }), null);
+  // A null detail is fine.
+  assert.ok(repository.appendAudit({ action: 'app.open' }));
+  assert.equal(repository.verifyAuditChain().ok, true);
+  repository.close();
+});
+
+test('repository reinforces a repeated fact and supersedes an outdated one', () => {
+  const repository = new ConversationRepository(':memory:');
+
+  // Repetition reinforces rather than duplicating.
+  const os1 = repository.addUserMemory({ fact: 'I use Windows 11', category: 'os' });
+  repository.addUserMemory({ fact: 'i use windows 11', category: 'os' });
+  const stored = repository.listUserMemories();
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].reinforcedCount, 2);
+
+  // A newer fact retires the old one: history is kept, but retrieval only sees
+  // what is currently true.
+  const os2 = repository.addUserMemory({ fact: 'I switched to Linux', category: 'os' });
+  assert.equal(repository.supersedeUserMemory(os1.id, os2.id), true);
+
+  const active = repository.listUserMemories();
+  assert.equal(active.length, 1);
+  assert.equal(active[0].fact, 'I switched to Linux');
+
+  const all = repository.listUserMemories({ includeSuperseded: true });
+  assert.equal(all.length, 2, 'superseded facts are retained for history');
+  assert.equal(all.find((m) => m.id === os1.id).supersededBy, os2.id);
+
+  // Superseding twice is a no-op.
+  assert.equal(repository.supersedeUserMemory(os1.id, os2.id), false);
+
+  repository.close();
+});
+
+test('repository supports editing a stored memory', () => {
+  const repository = new ConversationRepository(':memory:');
+  const mem = repository.addUserMemory({ fact: 'I prefer Vue', category: 'stack' });
+  const updated = repository.updateUserMemory({ id: mem.id, fact: 'I prefer React' });
+  assert.equal(updated.fact, 'I prefer React');
+  assert.equal(updated.category, 'stack', 'omitted fields are preserved');
+  assert.equal(repository.listUserMemories()[0].fact, 'I prefer React');
+  repository.close();
+});
+
 test('repository excludes dimension-mismatched vectors from retrieval (model-switch safety)', () => {
   const repository = new ConversationRepository(':memory:');
   const hub = repository.createSpecialistHub({ name: 'Dim Test' });
@@ -173,11 +271,23 @@ test('repository write boundary refuses empty or non-finite embeddings', () => {
   const hub = repository.createSpecialistHub({ name: 'Guard Test' });
 
   assert.throws(
-    () => repository.saveSpecialistChunk({ hubId: hub.id, sourceTitle: 'd', chunkText: 'x', embedding: [] }),
+    () =>
+      repository.saveSpecialistChunk({
+        hubId: hub.id,
+        sourceTitle: 'd',
+        chunkText: 'x',
+        embedding: [],
+      }),
     /empty/i,
   );
   assert.throws(
-    () => repository.saveSpecialistChunk({ hubId: hub.id, sourceTitle: 'd', chunkText: 'x', embedding: [1, NaN, 2] }),
+    () =>
+      repository.saveSpecialistChunk({
+        hubId: hub.id,
+        sourceTitle: 'd',
+        chunkText: 'x',
+        embedding: [1, NaN, 2],
+      }),
     /non-finite/i,
   );
   // Nothing was persisted.
@@ -205,7 +315,9 @@ test('repository backs up a legacy unversioned database before migrating, preser
       id TEXT PRIMARY KEY, title TEXT NOT NULL, summary TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_message_at TEXT
     );`);
-    raw.prepare(`INSERT INTO conversations VALUES ('legacy-1','Legacy thread',NULL,'t','t',NULL)`).run();
+    raw
+      .prepare(`INSERT INTO conversations VALUES ('legacy-1','Legacy thread',NULL,'t','t',NULL)`)
+      .run();
     raw.pragma('user_version = 0');
     raw.close();
 
@@ -233,7 +345,11 @@ test('repository exports the full corpus and re-imports it losslessly and idempo
 
   const conv = source.createConversation('Quantum notes');
   source.addMessage({ conversationId: conv.id, role: 'user', content: 'What is superposition?' });
-  source.addMessage({ conversationId: conv.id, role: 'assistant', content: 'A combination of basis states.' });
+  source.addMessage({
+    conversationId: conv.id,
+    role: 'assistant',
+    content: 'A combination of basis states.',
+  });
   source.addUserMemory({ fact: 'User studies quantum physics', category: 'user-defined' });
   source.setUserProfile({ name: 'Ada', role: 'Researcher' });
   const hub = source.createSpecialistHub({ name: 'Quantum Expert', systemPrompt: 'Be precise' });
@@ -278,4 +394,3 @@ test('repository exports the full corpus and re-imports it losslessly and idempo
 
   target.close();
 });
-

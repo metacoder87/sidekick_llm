@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import AuditLogPanel from './AuditLogPanel';
+import LegalNotice from './LegalNotice';
 
 export default function SettingsModal({
   isOpen,
@@ -19,13 +21,17 @@ export default function SettingsModal({
   const [role, setRole] = useState('Software Developer');
   const [tone, setTone] = useState('Balanced & Helpful');
   const [stack, setStack] = useState('JavaScript / Node.js');
-  const [instructions, setInstructions] = useState('Provide clean code, clear explanations, and best practices.');
+  const [instructions, setInstructions] = useState(
+    'Provide clean code, clear explanations, and best practices.',
+  );
 
   // Memory state
   const [memories, setMemories] = useState([]);
   const [newFact, setNewFact] = useState('');
   const [memoryCategory, setMemoryCategory] = useState('user-defined');
   const [memorySearch, setMemorySearch] = useState('');
+  const [editingMemoryId, setEditingMemoryId] = useState(null);
+  const [editingMemoryText, setEditingMemoryText] = useState('');
 
   // Web Search Settings state
   const [searchProvider, setSearchProvider] = useState('duckduckgo');
@@ -42,26 +48,34 @@ export default function SettingsModal({
   useEffect(() => {
     if (isOpen && sidekick) {
       // Load Profile
-      sidekick.profile.get().then((profile) => {
-        if (profile) {
-          setName(profile.name || 'User');
-          setRole(profile.role || 'Software Developer');
-          setTone(profile.tone || 'Balanced & Helpful');
-          setStack(profile.stack || 'JavaScript / Node.js');
-          setInstructions(profile.instructions || 'Provide clean code, clear explanations, and best practices.');
-        }
-      }).catch(() => {});
+      sidekick.profile
+        .get()
+        .then((profile) => {
+          if (profile) {
+            setName(profile.name || 'User');
+            setRole(profile.role || 'Software Developer');
+            setTone(profile.tone || 'Balanced & Helpful');
+            setStack(profile.stack || 'JavaScript / Node.js');
+            setInstructions(
+              profile.instructions || 'Provide clean code, clear explanations, and best practices.',
+            );
+          }
+        })
+        .catch(() => {});
 
       // Load Settings
-      sidekick.settings.get().then((allSettings) => {
-        if (allSettings) {
-          setSearchProvider(allSettings.searchProvider || 'duckduckgo');
-          setSearxngUrl(allSettings.searxngUrl || '');
-          setTavilyApiKey(allSettings.tavilyApiKey || '');
-          setBraveApiKey(allSettings.braveApiKey || '');
-          setBackgroundModel(allSettings.backgroundModel || '');
-        }
-      }).catch(() => {});
+      sidekick.settings
+        .get()
+        .then((allSettings) => {
+          if (allSettings) {
+            setSearchProvider(allSettings.searchProvider || 'duckduckgo');
+            setSearxngUrl(allSettings.searxngUrl || '');
+            setTavilyApiKey(allSettings.tavilyApiKey || '');
+            setBraveApiKey(allSettings.braveApiKey || '');
+            setBackgroundModel(allSettings.backgroundModel || '');
+          }
+        })
+        .catch(() => {});
 
       // Load Memories
       loadMemories();
@@ -73,7 +87,10 @@ export default function SettingsModal({
     try {
       const list = await sidekick.memory.list();
       setMemories(list || []);
-    } catch (_e) {}
+    } catch (error) {
+      console.warn('Could not load memories:', error.message);
+      setMemories([]);
+    }
   }
 
   if (!isOpen) return null;
@@ -126,6 +143,13 @@ export default function SettingsModal({
       category: memoryCategory,
     });
     setNewFact('');
+    await loadMemories();
+  }
+
+  async function handleSaveMemoryEdit() {
+    if (!sidekick || !editingMemoryId || !editingMemoryText.trim()) return;
+    await sidekick.memory.update({ id: editingMemoryId, fact: editingMemoryText.trim() });
+    setEditingMemoryId(null);
     await loadMemories();
   }
 
@@ -185,6 +209,20 @@ export default function SettingsModal({
           >
             🌐 Web Search Engine
           </button>
+          <button
+            type="button"
+            className={`settings-tab-btn ${activeTab === 'audit' ? 'active' : ''}`}
+            onClick={() => setActiveTab('audit')}
+          >
+            🔒 Security & Audit
+          </button>
+          <button
+            type="button"
+            className={`settings-tab-btn ${activeTab === 'legal' ? 'active' : ''}`}
+            onClick={() => setActiveTab('legal')}
+          >
+            ⚖️ Legal & Limits
+          </button>
         </div>
 
         <div className="settings-tab-body">
@@ -193,11 +231,21 @@ export default function SettingsModal({
               <div className="form-grid">
                 <label className="form-field">
                   <span>Your Name</span>
-                  <input type="text" value={name} onChange={(e) => setName(e.target.value)} required />
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    required
+                  />
                 </label>
                 <label className="form-field">
                   <span>Your Role / Occupation</span>
-                  <input type="text" value={role} onChange={(e) => setRole(e.target.value)} required />
+                  <input
+                    type="text"
+                    value={role}
+                    onChange={(e) => setRole(e.target.value)}
+                    required
+                  />
                 </label>
               </div>
 
@@ -237,7 +285,8 @@ export default function SettingsModal({
           {activeTab === 'memory' && (
             <div className="memory-tab-content">
               <p className="modal-description">
-                Facts stored here are automatically injected into model context across all chats to personalize responses.
+                Facts stored here are automatically injected into model context across all chats to
+                personalize responses.
               </p>
 
               <form onSubmit={handleAddMemory} className="memory-add-form">
@@ -274,9 +323,60 @@ export default function SettingsModal({
                   filteredMemories.map((mem) => (
                     <div key={mem.id} className="memory-card">
                       <div className="memory-card__content">
-                        <strong>{mem.fact}</strong>
+                        {editingMemoryId === mem.id ? (
+                          <input
+                            type="text"
+                            className="memory-edit-input"
+                            value={editingMemoryText}
+                            autoFocus
+                            onChange={(e) => setEditingMemoryText(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleSaveMemoryEdit();
+                              if (e.key === 'Escape') setEditingMemoryId(null);
+                            }}
+                          />
+                        ) : (
+                          <strong>{mem.fact}</strong>
+                        )}
                         <span className="memory-category-tag">{mem.category}</span>
+                        {mem.reinforcedCount > 1 ? (
+                          <span
+                            className="memory-category-tag"
+                            title="How often you've stated this"
+                          >
+                            ×{mem.reinforcedCount}
+                          </span>
+                        ) : null}
                       </div>
+                      {editingMemoryId === mem.id ? (
+                        <>
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={handleSaveMemoryEdit}
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => setEditingMemoryId(null)}
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          onClick={() => {
+                            setEditingMemoryId(mem.id);
+                            setEditingMemoryText(mem.fact);
+                          }}
+                        >
+                          Edit
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="ghost-button danger"
@@ -335,8 +435,8 @@ export default function SettingsModal({
               </label>
 
               <p className="modal-description">
-                Available models are retrieved directly from your local Ollama instance (`ollama list`).
-                The background model handles summaries, fact extraction, and research query
+                Available models are retrieved directly from your local Ollama instance (`ollama
+                list`). The background model handles summaries, fact extraction, and research query
                 generation — pick a small, fast model here to keep chat responsive while you
                 converse with a larger one.
               </p>
@@ -359,7 +459,10 @@ export default function SettingsModal({
 
                 <label className="form-field">
                   <span>Search Provider</span>
-                  <select value={searchProvider} onChange={(e) => setSearchProvider(e.target.value)}>
+                  <select
+                    value={searchProvider}
+                    onChange={(e) => setSearchProvider(e.target.value)}
+                  >
                     <option value="duckduckgo">DuckDuckGo (Free / No Key Needed)</option>
                     <option value="searxng">SearXNG (Self-Hosted Instance)</option>
                     <option value="tavily">Tavily Search API</option>
@@ -411,6 +514,10 @@ export default function SettingsModal({
               </div>
             </form>
           )}
+
+          {activeTab === 'audit' && <AuditLogPanel sidekick={sidekick} />}
+
+          {activeTab === 'legal' && <LegalNotice />}
         </div>
       </div>
     </div>

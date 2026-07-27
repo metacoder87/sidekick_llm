@@ -7,6 +7,9 @@ import SettingsModal from './components/SettingsModal';
 import Sidebar from './components/Sidebar';
 import SpecialistModal from './components/SpecialistModal';
 import SpecialistPickerModal from './components/SpecialistPickerModal';
+import ExpertLibraryModal from './components/ExpertLibraryModal';
+import LockScreen from './components/LockScreen';
+import Onboarding from './components/Onboarding';
 import ThemeToggle from './components/ThemeToggle';
 
 function moveConversationToFront(items, conversation) {
@@ -22,11 +25,7 @@ function replaceStreamingMessage(messages, requestId, nextMessage) {
     return [...messages, nextMessage];
   }
 
-  return messages.map((message) =>
-    message.id === tempId
-      ? nextMessage
-      : message,
-  );
+  return messages.map((message) => (message.id === tempId ? nextMessage : message));
 }
 
 export default function App() {
@@ -52,11 +51,35 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSpecialistPickerOpen, setIsSpecialistPickerOpen] = useState(false);
   const [isSpecialistModalOpen, setIsSpecialistModalOpen] = useState(false);
+  const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [specialistToEdit, setSpecialistToEdit] = useState(null);
 
   // Active Specialist Hubs — a panel of experts consulted for each message.
   const [activeSpecialistIds, setActiveSpecialistIds] = useState([]);
   const [activeSpecialistHubs, setActiveSpecialistHubs] = useState([]);
+
+  // Roundtable: 'synthesized' (one blended answer) vs 'roundtable' (each Expert
+  // speaks, then a moderator consolidates), plus how many rounds to go around.
+  const [panelMode, setPanelMode] = useState('synthesized');
+  const [rounds, setRounds] = useState(1);
+  const [roundtableStatus, setRoundtableStatus] = useState(null);
+
+  // Drag-and-drop document ingestion state.
+  const [isDragging, setIsDragging] = useState(false);
+  const [isIngestingDrop, setIsIngestingDrop] = useState(false);
+
+  // Security: null until we have asked the main process. When the corpus is
+  // encrypted and not yet opened, the whole app is replaced by the lock screen.
+  const [security, setSecurity] = useState(null);
+
+  // First-run guide: shown when Ollama is unreachable or no model is installed —
+  // otherwise a new user faces an app that silently does nothing. Dismissible.
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  // A ref, not state: refreshOllamaStatus is also called from a 15s interval whose
+  // closure is captured once (deps [sidekick]). As state, this read as false forever,
+  // so the onboarding wall reappeared seconds after "Skip for now" and the user could
+  // not get past it. A ref is always current, whoever is reading it.
+  const onboardingDismissedRef = useRef(false);
 
   const deferredSearch = useDeferredValue(searchQuery);
   const messagesRef = useRef(null);
@@ -83,7 +106,9 @@ export default function App() {
 
   async function refreshOllamaStatus() {
     if (!sidekick) {
-      setNotice('Desktop bridge unavailable. Restart the app to reload the Electron preload script.');
+      setNotice(
+        'Desktop bridge unavailable. Restart the app to reload the Electron preload script.',
+      );
       return;
     }
 
@@ -97,12 +122,23 @@ export default function App() {
     setOllamaStatus(status);
     setModels(listedModels);
     setActiveModel(selectedModel);
+
+    // Nothing to talk to, or nothing to talk with — guide the user rather than
+    // leaving them in a workspace that cannot answer.
+    const needsSetup = !status.available || (listedModels || []).length === 0;
+    setShowOnboarding(needsSetup && !onboardingDismissedRef.current);
     if (allSettings) {
       if (allSettings.webSearchEnabled !== undefined) {
         setWebSearchEnabled(allSettings.webSearchEnabled === 'true');
       }
       if (allSettings.activeTheme) {
         setTheme(allSettings.activeTheme);
+      }
+      if (allSettings.panelMode) {
+        setPanelMode(allSettings.panelMode);
+      }
+      if (allSettings.roundtableRounds) {
+        setRounds(Number(allSettings.roundtableRounds) || 1);
       }
     }
   }
@@ -163,7 +199,9 @@ export default function App() {
     // still exist).
     try {
       const settings = await sidekick.settings.get();
-      const savedIds = settings?.activeSpecialistIds ? JSON.parse(settings.activeSpecialistIds) : [];
+      const savedIds = settings?.activeSpecialistIds
+        ? JSON.parse(settings.activeSpecialistIds)
+        : [];
       if (Array.isArray(savedIds) && savedIds.length > 0) {
         const list = await sidekick.specialist.list().catch(() => []);
         const existing = new Set((list || []).map((h) => h.id));
@@ -189,14 +227,48 @@ export default function App() {
     }
   }
 
+  // Ask whether the corpus is locked BEFORE bootstrapping — every other IPC call is
+  // refused while locked, so bootstrapping first would just produce errors.
   useEffect(() => {
     if (!sidekick) {
-      setNotice('Desktop bridge unavailable. Restart the app to reload the Electron preload script.');
+      setNotice(
+        'Desktop bridge unavailable. Restart the app to reload the Electron preload script.',
+      );
       return;
     }
 
-    bootstrap().catch((error) => {
-      setNotice(error.message);
+    sidekick.security
+      .status()
+      .then((status) => {
+        setSecurity(status);
+        if (!status.locked) {
+          bootstrap().catch((error) => setNotice(error.message));
+        }
+      })
+      .catch(() => {
+        // Older preload without the security surface: behave as before.
+        setSecurity({ locked: false, encrypted: false });
+        bootstrap().catch((error) => setNotice(error.message));
+      });
+  }, [sidekick]);
+
+  // Called by the lock screen once the passphrase opens the corpus.
+  async function handleUnlocked(status) {
+    setSecurity(status);
+    await bootstrap().catch((error) => setNotice(error.message));
+  }
+
+  // The main process can lock the corpus on its own (idle, suspend, workstation
+  // lock). Clear the in-memory view as well — otherwise the corpus would be closed
+  // on disk while its contents stayed on screen.
+  useEffect(() => {
+    if (!sidekick?.events?.onLocked) return undefined;
+    return sidekick.events.onLocked((payload) => {
+      setActiveConversation(null);
+      setConversations([]);
+      setActiveSpecialistHubs([]);
+      setSecurity({ encrypted: true, locked: true, unlocked: false, remembered: false });
+      setNotice(`Locked — ${payload?.reason || 'inactivity'}.`);
     });
   }, [sidekick]);
 
@@ -257,6 +329,22 @@ export default function App() {
     const removeComplete = sidekick.events.onStreamComplete((payload) => {
       setStreamRequestId((currentId) => (currentId === payload.requestId ? '' : currentId));
       setConversations((items) => moveConversationToFront(items, payload.conversation));
+
+      // A roundtable finishes with no single message — its turns already arrived via
+      // the turn events. Only refresh the conversation metadata and clear status.
+      if (payload.roundtable) {
+        setRoundtableStatus(null);
+        if (payload.roundtable.stoppedEarly) {
+          setNotice(`Discussion ended early: ${payload.roundtable.stoppedEarly}.`);
+        }
+        setActiveConversation((current) =>
+          current && current.id === payload.conversationId
+            ? { ...current, ...payload.conversation, messages: current.messages }
+            : current,
+        );
+        return;
+      }
+
       setActiveConversation((current) => {
         if (!current || current.id !== payload.conversationId) {
           return current;
@@ -290,10 +378,77 @@ export default function App() {
       });
     });
 
+    // ---- Roundtable turn events -------------------------------------------------
+    // Each Expert's turn streams in as its own message, so the user watches the
+    // discussion happen instead of waiting for a single answer.
+    const removeTurnStart = sidekick.events.onTurnStart((payload) => {
+      setRoundtableStatus(
+        payload.kind === 'moderator'
+          ? 'Moderator is summarizing the discussion…'
+          : `Round ${payload.round} of ${payload.totalRounds} — ${payload.expertName} is speaking…`,
+      );
+      setActiveConversation((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          messages: [
+            ...current.messages,
+            {
+              id: `turn:${payload.turnId}`,
+              role: 'assistant',
+              content: '',
+              expertName: payload.expertName,
+              round: payload.round,
+              turnKind: payload.kind,
+              status: 'streaming',
+              createdAt: new Date().toISOString(),
+            },
+          ],
+        };
+      });
+    });
+
+    const removeTurnDelta = sidekick.events.onTurnDelta((payload) => {
+      setActiveConversation((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          messages: current.messages.map((message) =>
+            message.id === `turn:${payload.turnId}`
+              ? { ...message, content: payload.content }
+              : message,
+          ),
+        };
+      });
+    });
+
+    const removeTurnComplete = sidekick.events.onTurnComplete((payload) => {
+      setActiveConversation((current) => {
+        if (!current) return current;
+        const placeholderId = `turn:${payload.turnId}`;
+        const finalMessage = {
+          ...payload.message,
+          expertName: payload.expertName,
+          round: payload.round,
+          turnKind: payload.kind === 'moderator' ? 'moderator' : payload.passed ? 'pass' : 'expert',
+        };
+        const hasPlaceholder = current.messages.some((m) => m.id === placeholderId);
+        return {
+          ...current,
+          messages: hasPlaceholder
+            ? current.messages.map((m) => (m.id === placeholderId ? finalMessage : m))
+            : [...current.messages, finalMessage],
+        };
+      });
+    });
+
     return () => {
       removeUpdate();
       removeComplete();
       removeError();
+      removeTurnStart();
+      removeTurnDelta();
+      removeTurnComplete();
     };
   }, [sidekick]);
 
@@ -322,7 +477,9 @@ export default function App() {
 
     setConversations((items) =>
       items.map((conversation) =>
-        conversation.id === conversationId ? { ...conversation, ...updatedConversation } : conversation,
+        conversation.id === conversationId
+          ? { ...conversation, ...updatedConversation }
+          : conversation,
       ),
     );
 
@@ -398,29 +555,101 @@ export default function App() {
       content,
       webSearchOverride: webSearchEnabled,
       activeSpecialistIds,
+      panelModeOverride: panelMode,
+      roundsOverride: rounds,
     });
 
     setStreamRequestId(result.requestId);
     setConversations((items) => moveConversationToFront(items, result.conversation));
+
+    const isRoundtable = result.mode === 'roundtable';
+    if (isRoundtable) {
+      setRoundtableStatus('Convening the table…');
+    }
+
     setActiveConversation((current) => {
-      const baseMessages =
-        current && current.id === result.conversation.id ? current.messages : [];
+      const baseMessages = current && current.id === result.conversation.id ? current.messages : [];
 
       return {
         ...result.conversation,
         messages: [
           ...baseMessages,
           result.userMessage,
-          {
-            id: `stream:${result.requestId}`,
-            role: 'assistant',
-            content: '',
-            createdAt: new Date().toISOString(),
-            status: 'streaming',
-          },
+          // In roundtable mode each Expert's turn arrives as its own message via the
+          // turn events, so there is no single placeholder to fill.
+          ...(isRoundtable
+            ? []
+            : [
+                {
+                  id: `stream:${result.requestId}`,
+                  role: 'assistant',
+                  content: '',
+                  createdAt: new Date().toISOString(),
+                  status: 'streaming',
+                },
+              ]),
         ],
       };
     });
+  }
+
+  // Drop a document anywhere on the workspace: it becomes an Expert immediately and
+  // joins the consulting panel, so the user can ask about it in seconds.
+  async function handleDropFiles(fileList) {
+    if (!sidekick || !fileList || fileList.length === 0) return;
+
+    const filePaths = Array.from(fileList)
+      .map((file) => sidekick.files.getPath(file))
+      .filter(Boolean);
+
+    if (filePaths.length === 0) {
+      setNotice('Could not read the dropped file. Try the upload button in an Expert instead.');
+      return;
+    }
+
+    setIsIngestingDrop(true);
+    setNotice(
+      `Reading ${filePaths.length === 1 ? '1 document' : `${filePaths.length} documents`}…`,
+    );
+    try {
+      const result = await sidekick.research.quickIngest({ filePaths });
+      if (!result.success) {
+        setNotice(`Could not use that document — ${result.reason}`);
+        return;
+      }
+
+      // Consult the new Expert right away; that is the point of dropping it.
+      await applySpecialistSelection([...new Set([...activeSpecialistIds, result.hub.id])]);
+      setNotice(
+        `📄 "${result.hub.name}" is ready (${result.chunksIndexed} chunks) and now being consulted — ask away.` +
+          (result.filesFailed ? ` ${result.filesFailed} file(s) could not be read.` : ''),
+      );
+    } catch (error) {
+      setNotice(`Could not use that document — ${error.message}`);
+    } finally {
+      setIsIngestingDrop(false);
+    }
+  }
+
+  async function handlePanelModeChange(nextMode) {
+    setPanelMode(nextMode);
+    if (sidekick) {
+      await sidekick.settings.set('panelMode', nextMode);
+    }
+  }
+
+  async function handleRoundsChange(nextRounds) {
+    setRounds(nextRounds);
+    if (sidekick) {
+      await sidekick.settings.set('roundtableRounds', String(nextRounds));
+    }
+  }
+
+  // Stop going around the table; the moderator wraps up with what has been said.
+  async function handleAnswerNow() {
+    if (!sidekick || !streamRequestId) return;
+    setRoundtableStatus('Wrapping up — moderator will answer shortly…');
+    await sidekick.chat.answerNow(streamRequestId);
   }
 
   async function handleCancelGeneration() {
@@ -429,6 +658,33 @@ export default function App() {
     }
 
     await sidekick.chat.cancelGeneration(streamRequestId);
+  }
+
+  // Turn an assistant answer into a durable, retrievable note on an Expert. This is
+  // how research findings become permanent knowledge instead of scrolling away.
+  async function handleSaveNote({ hubId, content }) {
+    if (!sidekick || !hubId || !content) return null;
+
+    const firstLine =
+      content
+        .replace(/[#*`>]/g, '')
+        .split('\n')
+        .map((s) => s.trim())
+        .find(Boolean) || 'Saved answer';
+    const result = await sidekick.notes.create({
+      hubId,
+      title: firstLine.slice(0, 70),
+      body: content,
+      author: 'model',
+      conversationId: activeConversationId,
+    });
+
+    setNotice(
+      result.indexed
+        ? `Saved as a note and indexed into the Expert's vault.`
+        : `Note saved, but not indexed: ${result.reason || 'embedding unavailable'}`,
+    );
+    return result;
   }
 
   async function handleExportConversation(conversationId) {
@@ -476,13 +732,30 @@ export default function App() {
     }
   }
 
+  // Locked corpus: nothing else may render. The main process independently refuses
+  // every non-security IPC call, so this is a genuine gate, not just a cover.
+  if (security && security.locked) {
+    return <LockScreen sidekick={sidekick} status={security} onUnlocked={handleUnlocked} />;
+  }
+
+  // First run / no models: guide before showing an app that cannot answer.
+  if (showOnboarding) {
+    return (
+      <Onboarding
+        sidekick={sidekick}
+        onDone={() => {
+          onboardingDismissedRef.current = true;
+          setShowOnboarding(false);
+          refreshOllamaStatus().catch(() => {});
+        }}
+      />
+    );
+  }
+
   const activeTitle = activeConversation?.title || 'New Conversation';
 
   return (
-    <main
-      className="app-shell"
-      style={{ gridTemplateColumns: `${sidebarWidth}px auto 1fr` }}
-    >
+    <main className="app-shell" style={{ gridTemplateColumns: `${sidebarWidth}px auto 1fr` }}>
       <Sidebar
         conversations={conversations}
         activeConversationId={activeConversationId}
@@ -501,7 +774,26 @@ export default function App() {
 
       <ResizableDivider onResize={handleResizeSidebar} />
 
-      <section className="workspace">
+      <section
+        className={`workspace${isDragging ? ' workspace--dropping' : ''}`}
+        onDragOver={(event) => {
+          // Only react to actual files, not text selections being dragged around.
+          if (Array.from(event.dataTransfer.types || []).includes('Files')) {
+            event.preventDefault();
+            setIsDragging(true);
+          }
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget === event.target) setIsDragging(false);
+        }}
+        onDrop={(event) => {
+          if (Array.from(event.dataTransfer.types || []).includes('Files')) {
+            event.preventDefault();
+            setIsDragging(false);
+            handleDropFiles(event.dataTransfer.files);
+          }
+        }}
+      >
         <header className="workspace__banner">
           <div className="workspace__banner-info">
             <h2 className="header-chat-title">{activeTitle}</h2>
@@ -526,7 +818,9 @@ export default function App() {
                 Consulting:
               </span>
             ) : null}
-            {activeSpecialistHubs.map((hub) => (
+            {/* Show a few pills, then collapse — a large panel would otherwise push
+                the header off the window. The full list stays available on hover. */}
+            {activeSpecialistHubs.slice(0, 3).map((hub) => (
               <span
                 key={hub.id}
                 className="specialist-pill-header"
@@ -536,9 +830,36 @@ export default function App() {
                 ⚡ {hub.name}
               </span>
             ))}
+            {activeSpecialistHubs.length > 3 ? (
+              <span
+                className="specialist-pill-header"
+                onClick={() => setIsSpecialistPickerOpen(true)}
+                title={activeSpecialistHubs
+                  .slice(3)
+                  .map((hub) => hub.name)
+                  .join(', ')}
+              >
+                +{activeSpecialistHubs.length - 3} more
+              </span>
+            ) : null}
             <ThemeToggle theme={theme} onToggle={handleToggleTheme} />
           </div>
         </header>
+
+        {isDragging ? (
+          <div className="drop-overlay">
+            <div className="drop-overlay__panel">
+              <strong>📄 Drop to ask about this document</strong>
+              <span>It becomes an Expert you can consult — PDF, TXT, MD, JSON, CSV</span>
+            </div>
+          </div>
+        ) : null}
+
+        {isIngestingDrop ? (
+          <div className="roundtable-status">📄 Indexing the document…</div>
+        ) : null}
+
+        {roundtableStatus ? <div className="roundtable-status">🗣️ {roundtableStatus}</div> : null}
 
         <div className="workspace__chat" ref={messagesRef}>
           <ChatView
@@ -546,6 +867,8 @@ export default function App() {
             streamRequestId={streamRequestId}
             activeSpecialists={activeSpecialistHubs}
             onExportConversation={handleExportConversation}
+            onSaveNote={handleSaveNote}
+            onAddExpert={handleSelectSpecialist}
           />
         </div>
 
@@ -556,6 +879,13 @@ export default function App() {
           onToggleWebSearch={handleToggleWebSearch}
           onSend={handleSendMessage}
           onCancel={handleCancelGeneration}
+          expertCount={activeSpecialistHubs.length}
+          panelMode={panelMode}
+          onPanelModeChange={handlePanelModeChange}
+          rounds={rounds}
+          onRoundsChange={handleRoundsChange}
+          onAnswerNow={handleAnswerNow}
+          isRoundtableRunning={!!streamRequestId && !!roundtableStatus}
         />
       </section>
 
@@ -585,6 +915,17 @@ export default function App() {
           setSpecialistToEdit(hub);
           setIsSpecialistModalOpen(true);
         }}
+        onOpenLibrary={() => setIsLibraryOpen(true)}
+      />
+
+      <ExpertLibraryModal
+        isOpen={isLibraryOpen}
+        onClose={() => setIsLibraryOpen(false)}
+        sidekick={sidekick}
+        // A freshly installed Expert joins the consulting panel immediately.
+        onInstalled={(hub) =>
+          applySpecialistSelection([...new Set([...activeSpecialistIds, hub.id])])
+        }
       />
 
       <SpecialistModal
