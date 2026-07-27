@@ -29,6 +29,13 @@ function registerIpcHandlers({ userDataPath }) {
   // between turns to skip remaining rounds and go straight to the moderator.
   const wrapUpRequests = new Set();
 
+  // Record the session opening, and any integrity problem, as the first audit
+  // entries — a gap in the session record is itself a signal.
+  repository.appendAudit({ action: 'app.open', detail: `schema v${repository.getSchemaVersion()}` });
+  if (repository.integrity && repository.integrity.ok === false) {
+    repository.appendAudit({ action: 'integrity.failed', detail: repository.integrity.detail });
+  }
+
   ipcMain.handle(channels.models.list, async () => {
     return ollama.listModels();
   });
@@ -62,6 +69,12 @@ function registerIpcHandlers({ userDataPath }) {
   });
 
   ipcMain.handle(channels.settings.set, async (_event, { key, value }) => {
+    // Record that a setting changed, but never the value of a secret.
+    const isSecret = /apikey$/i.test(key);
+    repository.appendAudit({
+      action: 'settings.set',
+      detail: isSecret ? `${key}=<redacted>` : `${key}=${value}`,
+    });
     repository.setSetting(key, value);
     return repository.getAllSettings();
   });
@@ -93,7 +106,14 @@ function registerIpcHandlers({ userDataPath }) {
   });
 
   ipcMain.handle(channels.specialist.delete, async (_event, id) => {
+    const hub = repository.getSpecialistHub(id);
     const success = repository.deleteSpecialistHub(id);
+    if (success) {
+      repository.appendAudit({
+        action: 'expert.delete',
+        detail: hub ? `${hub.name} (${hub.chunkCount} chunks)` : id,
+      });
+    }
     return { success };
   });
 
@@ -129,7 +149,9 @@ function registerIpcHandlers({ userDataPath }) {
   });
 
   ipcMain.handle(channels.notes.delete, async (_event, id) => {
+    const note = repository.getNote(id);
     const success = repository.deleteNote(id);
+    if (success) repository.appendAudit({ action: 'note.delete', detail: note ? note.title : id });
     return { success };
   });
 
@@ -224,6 +246,10 @@ function registerIpcHandlers({ userDataPath }) {
     }
 
     await fs.writeFile(target.filePath, JSON.stringify(pack, null, 2), 'utf8');
+    repository.appendAudit({
+      action: 'expertPack.export',
+      detail: `${pack.expert.name} → ${target.filePath}`,
+    });
     return { saved: true, filePath: target.filePath, manifest: pack.manifest };
   });
 
@@ -246,7 +272,12 @@ function registerIpcHandlers({ userDataPath }) {
       throw new Error('That file is not valid JSON.');
     }
 
-    return { imported: true, ...repository.importExpertPack(pack) };
+    const outcome = repository.importExpertPack(pack);
+    repository.appendAudit({
+      action: 'expertPack.import',
+      detail: `${outcome.hub.name} (${outcome.chunksImported} chunks) from ${result.filePaths[0]}`,
+    });
+    return { imported: true, ...outcome };
   });
 
   ipcMain.handle(channels.specialist.reindex, async (event, { hubId }) => {
@@ -441,6 +472,7 @@ function registerIpcHandlers({ userDataPath }) {
 
   ipcMain.handle(channels.memory.delete, async (_event, id) => {
     const success = repository.deleteUserMemory(id);
+    if (success) repository.appendAudit({ action: 'memory.delete', detail: id });
     return { success };
   });
 
@@ -462,6 +494,7 @@ function registerIpcHandlers({ userDataPath }) {
 
   ipcMain.handle(channels.chat.deleteConversation, async (_event, conversationId) => {
     const success = repository.deleteConversation(conversationId);
+    if (success) repository.appendAudit({ action: 'conversation.delete', detail: conversationId });
     return { success };
   });
 
@@ -831,11 +864,52 @@ function registerIpcHandlers({ userDataPath }) {
     }
 
     const counts = repository.importAll(payload);
+    repository.appendAudit({
+      action: 'corpus.import',
+      detail: `${JSON.stringify(counts)} from ${result.filePaths[0]}`,
+    });
     return { imported: true, counts, filePath: result.filePaths[0] };
   });
 
   ipcMain.handle(channels.system.getIntegrity, async () => {
     return repository.integrity;
+  });
+
+  // ---- Audit log surface --------------------------------------------------------
+  ipcMain.handle(channels.system.auditList, async (_event, options) => {
+    return {
+      entries: repository.listAudit(options || {}),
+      total: repository.countAudit(),
+    };
+  });
+
+  ipcMain.handle(channels.system.auditVerify, async () => {
+    return repository.verifyAuditChain();
+  });
+
+  ipcMain.handle(channels.system.auditExport, async () => {
+    const verification = repository.verifyAuditChain();
+    const payload = {
+      app: 'sidekick-llm',
+      kind: 'audit-log',
+      exportedAt: new Date().toISOString(),
+      verification,
+      entries: repository.listAudit({ limit: 100000 }).reverse(),
+    };
+
+    const target = await dialog.showSaveDialog({
+      title: 'Export audit log',
+      defaultPath: stampFilename('sidekick-audit'),
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+
+    if (target.canceled || !target.filePath) {
+      return { saved: false, cancelled: true };
+    }
+
+    await fs.writeFile(target.filePath, JSON.stringify(payload, null, 2), 'utf8');
+    repository.appendAudit({ action: 'audit.export', detail: target.filePath });
+    return { saved: true, filePath: target.filePath, verification };
   });
 
   ipcMain.handle(channels.chat.exportAll, async () => {
@@ -850,6 +924,12 @@ function registerIpcHandlers({ userDataPath }) {
     }
 
     await fs.writeFile(target.filePath, JSON.stringify(payload, null, 2), 'utf8');
+    // A full-corpus export leaves the app's protection: worth recording, and worth
+    // remembering that the JSON itself is plaintext (see Stage 4 threat model).
+    repository.appendAudit({
+      action: 'corpus.export',
+      detail: `${payload.conversations.length} conversations, ${payload.specialistHubs.length} experts → ${target.filePath}`,
+    });
     return { saved: true, filePath: target.filePath };
   });
 

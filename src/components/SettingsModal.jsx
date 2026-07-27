@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import AuditLogPanel from './AuditLogPanel';
 
 export default function SettingsModal({
   isOpen,
@@ -193,6 +194,13 @@ export default function SettingsModal({
             onClick={() => setActiveTab('search')}
           >
             🌐 Web Search Engine
+          </button>
+          <button
+            type="button"
+            className={`settings-tab-btn ${activeTab === 'audit' ? 'active' : ''}`}
+            onClick={() => setActiveTab('audit')}
+          >
+            🔒 Security & Audit
           </button>
         </div>
 
@@ -460,6 +468,8 @@ export default function SettingsModal({
               </div>
             </form>
           )}
+
+          {activeTab === 'audit' && <AuditLogPanel sidekick={sidekick} />}
         </div>
       </div>
     </div>

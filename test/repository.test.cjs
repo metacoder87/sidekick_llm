@@ -145,6 +145,65 @@ test('repository de-duplicates near-identical memories instead of accumulating t
   repository.close();
 });
 
+test('audit log records actions in a hash chain that verifies', () => {
+  const repository = new ConversationRepository(':memory:');
+
+  repository.appendAudit({ action: 'corpus.export', detail: '/tmp/a.json' });
+  repository.appendAudit({ action: 'expert.delete', detail: 'Legal Expert' });
+  repository.appendAudit({ action: 'settings.set', detail: 'tavilyApiKey=<redacted>' });
+
+  const entries = repository.listAudit();
+  assert.equal(entries.length, 3);
+  // Newest first, and each entry links to the previous one.
+  assert.equal(entries[0].action, 'settings.set');
+  assert.equal(entries[0].prevHash, entries[1].hash);
+  assert.equal(repository.countAudit(), 3);
+
+  const verification = repository.verifyAuditChain();
+  assert.equal(verification.ok, true);
+  assert.equal(verification.entries, 3);
+  assert.equal(verification.brokenAt, null);
+
+  repository.close();
+});
+
+test('audit log detects tampering — edited and deleted entries both break the chain', () => {
+  const repository = new ConversationRepository(':memory:');
+  for (const action of ['app.open', 'corpus.export', 'expert.delete', 'note.delete']) {
+    repository.appendAudit({ action, detail: `${action} detail` });
+  }
+  assert.equal(repository.verifyAuditChain().ok, true);
+
+  // Someone edits an entry in place to hide what they did.
+  repository.db.prepare(`UPDATE audit_log SET detail = 'innocuous' WHERE seq = 2`).run();
+  const edited = repository.verifyAuditChain();
+  assert.equal(edited.ok, false);
+  assert.equal(edited.brokenAt, 2, 'verification should point at the altered entry');
+
+  repository.close();
+
+  // Someone deletes an entry entirely.
+  const second = new ConversationRepository(':memory:');
+  for (const action of ['app.open', 'corpus.export', 'expert.delete']) {
+    second.appendAudit({ action, detail: 'd' });
+  }
+  second.db.prepare(`DELETE FROM audit_log WHERE seq = 2`).run();
+  const deleted = second.verifyAuditChain();
+  assert.equal(deleted.ok, false, 'a removed entry must break the chain');
+  second.close();
+});
+
+test('audit append never throws and never blocks the action it records', () => {
+  const repository = new ConversationRepository(':memory:');
+  // Missing action is ignored rather than raising into the caller's code path.
+  assert.equal(repository.appendAudit({}), null);
+  assert.equal(repository.appendAudit({ action: '' }), null);
+  // A null detail is fine.
+  assert.ok(repository.appendAudit({ action: 'app.open' }));
+  assert.equal(repository.verifyAuditChain().ok, true);
+  repository.close();
+});
+
 test('repository reinforces a repeated fact and supersedes an outdated one', () => {
   const repository = new ConversationRepository(':memory:');
 

@@ -33,6 +33,9 @@ contextBridge.exposeInMainWorld('sidekick', {
   },
   system: {
     getIntegrity: () => ipcRenderer.invoke(channels.system.getIntegrity),
+    auditList: (options) => ipcRenderer.invoke(channels.system.auditList, options),
+    auditVerify: () => ipcRenderer.invoke(channels.system.auditVerify),
+    auditExport: () => ipcRenderer.invoke(channels.system.auditExport),
   },
   settings: {
     get: () => ipcRenderer.invoke(channels.settings.get),

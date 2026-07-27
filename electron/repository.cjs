@@ -1,13 +1,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const Database = require('better-sqlite3');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 
 // The current target schema version. Bump this and append a migration to
 // MIGRATIONS whenever the schema changes. The corpus is the project's asset
 // (see ROADMAP.md §3) — every migration runs behind a backup and an integrity
 // check so a bad upgrade can never destroy user data.
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 const MAX_BACKUPS = 5;
 
 const DEFAULT_TITLE = 'New conversation';
@@ -335,6 +335,25 @@ class ConversationRepository {
           this.addColumnIfMissing('messages', 'turn_kind', 'TEXT');
         },
       },
+      {
+        // Append-only audit log of sensitive actions, hash-chained so tampering is
+        // detectable: each entry's hash covers the previous hash, so removing or
+        // editing any entry breaks the chain from that point on. This is the
+        // accountability half of Stage 4 (the other half is encryption at rest).
+        version: 8,
+        up: () => {
+          this.db.exec(`
+            CREATE TABLE IF NOT EXISTS audit_log (
+              seq INTEGER PRIMARY KEY AUTOINCREMENT,
+              at TEXT NOT NULL,
+              action TEXT NOT NULL,
+              detail TEXT,
+              prev_hash TEXT,
+              hash TEXT NOT NULL
+            );
+          `);
+        },
+      },
     ];
 
     // Guard against drift: the migration list must reach the declared version.
@@ -462,6 +481,16 @@ class ConversationRepository {
       CREATE VIRTUAL TABLE IF NOT EXISTS conversation_search USING fts5(
         conversation_id UNINDEXED,
         title
+      );
+
+      -- Append-only, hash-chained audit log of sensitive actions (Stage 4).
+      CREATE TABLE IF NOT EXISTS audit_log (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        at TEXT NOT NULL,
+        action TEXT NOT NULL,
+        detail TEXT,
+        prev_hash TEXT,
+        hash TEXT NOT NULL
       );
 
       -- Notes: editable, first-class knowledge attached to an Expert (user- or
@@ -1549,6 +1578,73 @@ class ConversationRepository {
         WHERE id = ?
       `)
       .run(JSON.stringify(embedding), embeddingModel, embedding.length, chunkId);
+  }
+
+  // ---- Audit log ----------------------------------------------------------------
+  // Append-only record of sensitive actions. Each row's hash covers the previous
+  // row's hash, so deleting or editing any entry breaks verification from that point
+  // forward — the log is tamper-EVIDENT (you can tell), not tamper-proof (you cannot
+  // be prevented). That is the honest guarantee, and it is what a compliance story
+  // actually needs.
+  appendAudit({ action, detail = null }) {
+    if (!action) return null;
+    try {
+      const at = now();
+      const prev = this.db
+        .prepare(`SELECT hash FROM audit_log ORDER BY seq DESC LIMIT 1`)
+        .get();
+      const prevHash = prev ? prev.hash : '';
+      const payload = `${prevHash}|${at}|${action}|${detail == null ? '' : String(detail)}`;
+      const hash = createHash('sha256').update(payload).digest('hex');
+
+      this.db
+        .prepare(`
+          INSERT INTO audit_log (at, action, detail, prev_hash, hash)
+          VALUES (?, ?, ?, ?, ?)
+        `)
+        .run(at, action, detail == null ? null : String(detail), prevHash || null, hash);
+
+      return { at, action, detail, hash };
+    } catch (error) {
+      // Auditing must never break the action it is recording.
+      console.error('Audit append failed:', error.message);
+      return null;
+    }
+  }
+
+  listAudit({ limit = 200, offset = 0 } = {}) {
+    return this.db
+      .prepare(`
+        SELECT seq, at, action, detail, prev_hash AS prevHash, hash
+        FROM audit_log
+        ORDER BY seq DESC
+        LIMIT @limit OFFSET @offset
+      `)
+      .all({ limit, offset });
+  }
+
+  countAudit() {
+    return this.db.prepare(`SELECT COUNT(*) AS count FROM audit_log`).get().count;
+  }
+
+  // Recomputes the chain from the beginning. Returns the first sequence number where
+  // the log stops verifying, or null when the whole chain is intact.
+  verifyAuditChain() {
+    const rows = this.db
+      .prepare(`SELECT seq, at, action, detail, prev_hash AS prevHash, hash FROM audit_log ORDER BY seq ASC`)
+      .all();
+
+    let expectedPrev = '';
+    for (const row of rows) {
+      const payload = `${expectedPrev}|${row.at}|${row.action}|${row.detail == null ? '' : row.detail}`;
+      const hash = createHash('sha256').update(payload).digest('hex');
+      if (hash !== row.hash || (row.prevHash || '') !== expectedPrev) {
+        return { ok: false, entries: rows.length, brokenAt: row.seq };
+      }
+      expectedPrev = row.hash;
+    }
+
+    return { ok: true, entries: rows.length, brokenAt: null };
   }
 
   // ---- Notes -------------------------------------------------------------------

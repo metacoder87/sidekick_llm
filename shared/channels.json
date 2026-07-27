@@ -22,7 +22,10 @@
     "importAll": "chat:importAll"
   },
   "system": {
-    "getIntegrity": "system:getIntegrity"
+    "getIntegrity": "system:getIntegrity",
+    "auditList": "system:auditList",
+    "auditVerify": "system:auditVerify",
+    "auditExport": "system:auditExport"
   },
   "settings": {
     "get": "settings:get",
