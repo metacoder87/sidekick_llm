@@ -76,7 +76,10 @@ export default function SettingsModal({
     try {
       const list = await sidekick.memory.list();
       setMemories(list || []);
-    } catch (_e) {}
+    } catch (error) {
+      console.warn('Could not load memories:', error.message);
+      setMemories([]);
+    }
   }
 
   if (!isOpen) return null;

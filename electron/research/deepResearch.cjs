@@ -252,7 +252,7 @@ class DeepResearchWorker {
     return [noLabel.split(/\s+/).slice(0, 12).join(' ')];
   }
 
-  async runWebDeepResearch({ hubId, topic, seedUrls = [], depth = 1, model, embeddingModel, searchOptions = {}, onProgress = () => {} }) {
+  async runWebDeepResearch({ hubId, topic, seedUrls = [], model, embeddingModel, searchOptions = {}, onProgress = () => {} }) {
     const embedModel = embeddingModel || model;
     onProgress({ status: 'searching', message: `Searching the web for "${topic}"...` });
 

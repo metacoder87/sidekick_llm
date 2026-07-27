@@ -1,7 +1,7 @@
 {
   "name": "sidekick-llm",
   "version": "0.1.0",
-  "description": "Desktop interface for local LLMs with persistent conversation history.",
+  "description": "Privacy-first desktop knowledge system for local LLMs — AI Experts, grounded citations, and a corpus you own.",
   "main": "electron/main.cjs",
   "scripts": {
     "predev": "npm run rebuild:native",
@@ -31,7 +31,6 @@
   "author": {
     "name": "Sidekick LLM"
   },
-  "description": "Privacy-first desktop knowledge system for local LLMs — AI Experts, grounded citations, and a corpus you own.",
   "build": {
     "appId": "com.sidekick.llm",
     "productName": "Sidekick LLM",
@@ -81,11 +80,18 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.1",
+    "@eslint/js": "^9.39.5",
     "@vitejs/plugin-react": "^6.0.1",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
     "electron": "^41.1.1",
     "electron-builder": "^26.15.3",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.8.0",
+    "prettier": "^3.9.6",
     "vite": "^8.0.5",
     "wait-on": "^8.0.1"
   }

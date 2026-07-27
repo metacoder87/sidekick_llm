@@ -43,6 +43,7 @@ function roundedRectDistance(x, y, half, radius) {
   return Math.hypot(ox, oy) + Math.min(Math.max(dx, dy), 0) - radius;
 }
 
+// eslint-disable-next-line no-unused-vars -- kept as reference for the compositing math
 function blend(dst, src, alpha) {
   return [
     Math.round(dst[0] * (1 - alpha) + src[0] * alpha),

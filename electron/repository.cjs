@@ -1134,7 +1134,7 @@ class ConversationRepository {
           ORDER BY MIN(rank), COALESCE(lastMessageAt, updatedAt) DESC
         `)
         .all({ ftsQuery });
-    } catch (error) {
+    } catch (_error) {
       return this.db
         .prepare(`
           SELECT
@@ -1972,7 +1972,6 @@ class ConversationRepository {
   }
 
   updateMessageContent(messageId, newContent) {
-    const timestamp = now();
     this.db
       .prepare(`UPDATE messages SET content = ? WHERE id = ?`)
       .run(newContent.trim(), messageId);

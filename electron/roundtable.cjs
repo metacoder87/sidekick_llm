@@ -12,7 +12,7 @@ const PASS_TOKEN = 'NO_FURTHER_COMMENT';
 // How an Expert is told to behave on its turn. The "only speak if you add something"
 // rule is what prevents rounds of "I agree with the previous expert" padding — the
 // dominant quality risk in multi-agent deliberation.
-function expertTurnInstruction({ round, totalRounds, isFinalRound, hasTranscript }) {
+function expertTurnInstruction({ round, totalRounds, isFinalRound }) {
   // Round 1 is INDEPENDENT: an Expert must not see the others' opening answers.
   // Showing them anchors every later speaker on the first one, and by round 2 the
   // whole panel is restating a single view — observed with 5 Experts x 4 rounds.
@@ -153,7 +153,6 @@ class RoundtableOrchestrator {
           round,
           totalRounds,
           isFinalRound,
-          hasTranscript: turns.length > 0,
         });
 
         // Ground this Expert on its own vault for the original question.

@@ -604,7 +604,7 @@ function registerIpcHandlers({ userDataPath }) {
   });
 
   // Deep Research & Document Ingestion Handlers
-  handleSecure(channels.research.start, async (event, { hubId, topic, seedUrls, depth }) => {
+  handleSecure(channels.research.start, async (event, { hubId, topic, seedUrls }) => {
     let model = repository.getSetting('activeModel');
     if (!model) {
       const models = await ollama.listModels();
@@ -624,7 +624,6 @@ function registerIpcHandlers({ userDataPath }) {
       hubId,
       topic,
       seedUrls: seedUrls || [],
-      depth: depth || 1,
       // Query decomposition is utility work — use the background model if set.
       model: repository.getSetting('backgroundModel') || model,
       embeddingModel,

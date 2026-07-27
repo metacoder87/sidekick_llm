@@ -51,7 +51,10 @@ export default function SpecialistPickerModal({
     try {
       const list = await sidekick.specialist.list();
       setHubs(list || []);
-    } catch (_e) {}
+    } catch (error) {
+      console.warn('Could not load Experts:', error.message);
+      setHubs([]);
+    }
   }
 
   useEffect(() => {
