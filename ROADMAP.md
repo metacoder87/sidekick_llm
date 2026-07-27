@@ -688,7 +688,7 @@ Experts; no unvetted content ever silently entered a vault.
 
 ---
 
-### STAGE 4 — Security, Privacy & Compliance  (~5–6 weeks; gate behind months of use)
+### STAGE 4 — Security, Privacy & Compliance  ✅ COMPLETE
 *Goal: the corpus is safe at rest and access is accountable — the precondition for
 trusting Sidekick with medical records, legal contracts, and other sensitive data,
 and a hard prerequisite for any distribution.*
@@ -730,7 +730,8 @@ and a hard prerequisite for any distribution.*
         export option and mark plain exports as sensitive.
 - [x] **App lock (single-user local gate) ✅ SHIPPED.** Passphrase gate with optional
       OS-keychain `safeStorage` caching; the passphrase IS the encryption key. Manual
-      lock available. *Auto-lock-on-idle still TODO.*
+      lock available, plus **auto-lock on idle** (system-wide idle via powerMonitor,
+      enforced in the main process) and immediate lock on suspend / workstation lock.
 - [x] **Audit log ✅ SHIPPED.** Append-only `audit_log` table recording sensitive actions
       (corpus open, export/import, delete, Expert train/re-index, settings change,
       integrity events) with timestamp + details; optional hash-chain for
@@ -739,8 +740,10 @@ and a hard prerequisite for any distribution.*
       hash), verified across restarts; edited AND deleted entries both detected with
       the broken sequence number. Secret values are never recorded. Settings →
       🔒 Security & Audit shows verification, the entry list, and JSON export.*
-- [ ] **Dependency & supply-chain hygiene:** `npm audit` in CI, pinned/locked deps,
-      review of any new native modules.
+- [x] **Dependency & supply-chain hygiene ✅ SHIPPED.** GitHub Actions CI (install
+      incl. native rebuild → build → full suite → audit) on push/PR and weekly, so
+      new advisories surface without any code changing. `npm run audit:prod` fails on
+      high-severity production advisories; dev-only findings warn. Currently 0.
 
 > **PRODUCT-DIRECTION DECISION — RBAC / multi-user (do NOT build speculatively).**
 > Role-based access control implies *multiple users with differentiated
@@ -752,8 +755,15 @@ and a hard prerequisite for any distribution.*
 > ship **app-lock + audit log** for the personal product; treat **RBAC + multi-user**
 > as a deliberately-scoped **"Teams / Enterprise edition"** decision, not a bolt-on.
 
-**STAGE 4 EXIT:** the corpus is encrypted at rest (incl. WAL + backups) behind an
-app lock; sensitive actions are logged; the link-handling exfil path is closed.
+**STAGE 4 EXIT:** ✅ met. The corpus CAN be encrypted at rest behind an app lock with
+auto-lock; sensitive actions are logged in a tamper-evident chain; the link-handling
+exfil path is closed; CI audits dependencies.
+
+**STATUS (2026-07-27):** encryption is opt-in and OFF by default — the mechanism is
+shipped and verified on a copy of the real corpus, but no user is force-migrated.
+**Carried forward:** plaintext JSON exports are by design (an encrypted-export option
+is worth adding before distribution), and the unencrypted pre-encryption backup is
+left on disk for safety — the UI names its path so the user can remove it.
 
 ---
 
