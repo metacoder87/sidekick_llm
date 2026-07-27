@@ -47,6 +47,7 @@
       "dist/**/*",
       "electron/**/*",
       "shared/**/*",
+      "LEGAL/**/*",
       "package.json",
       "!**/*.map"
     ],

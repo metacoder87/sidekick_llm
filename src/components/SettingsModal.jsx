@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import AuditLogPanel from './AuditLogPanel';
+import LegalNotice from './LegalNotice';
 
 export default function SettingsModal({
   isOpen,
@@ -214,6 +215,13 @@ export default function SettingsModal({
             onClick={() => setActiveTab('audit')}
           >
             🔒 Security & Audit
+          </button>
+          <button
+            type="button"
+            className={`settings-tab-btn ${activeTab === 'legal' ? 'active' : ''}`}
+            onClick={() => setActiveTab('legal')}
+          >
+            ⚖️ Legal & Limits
           </button>
         </div>
 
@@ -508,6 +516,8 @@ export default function SettingsModal({
           )}
 
           {activeTab === 'audit' && <AuditLogPanel sidekick={sidekick} />}
+
+          {activeTab === 'legal' && <LegalNotice />}
         </div>
       </div>
     </div>

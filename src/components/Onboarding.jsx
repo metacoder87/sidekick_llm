@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { DisclaimerSummary } from './LegalNotice';
 
 // First-run guide. Shown when Ollama is unreachable or no usable model is installed —
 // the two states where a new user would otherwise face an app that silently does
@@ -174,6 +175,8 @@ export default function Onboarding({ sidekick, onDone }) {
             ) : null}
           </div>
         ) : null}
+
+        <DisclaimerSummary />
 
         <div className="onboarding__actions">
           <button type="button" className="ghost-button" onClick={onDone}>

@@ -1616,3 +1616,66 @@ button:focus-visible {
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* ---- Legal notice (Settings → Legal & Limits, and the onboarding summary) ---- */
+.legal-panel {
+  max-width: 70ch;
+  line-height: 1.6;
+}
+
+.legal-panel h3 {
+  margin: 1.4rem 0 0.5rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+}
+
+.legal-panel h3:first-child {
+  margin-top: 0;
+}
+
+.legal-panel p,
+.legal-panel li {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.legal-panel ul,
+.legal-panel ol {
+  margin: 0.5rem 0 0.5rem 1.1rem;
+  padding: 0;
+}
+
+.legal-panel li {
+  margin-bottom: 0.45rem;
+}
+
+.legal-panel strong {
+  color: var(--text-main);
+}
+
+.legal-panel__footnote {
+  margin-top: 1.5rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--panel-border);
+  font-size: 0.82rem;
+  opacity: 0.8;
+}
+
+/* Compact form for first run. Sits above the actions so it is read before the
+   user commits, without becoming a modal wall the user clicks past reflexively. */
+.legal-summary {
+  margin: 1.25rem 0 0;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid var(--panel-border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--panel-soft);
+  color: var(--text-muted);
+  font-size: 0.83rem;
+  line-height: 1.55;
+}
+
+.legal-summary strong {
+  color: var(--text-main);
+}

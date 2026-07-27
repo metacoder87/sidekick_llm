@@ -75,7 +75,11 @@ export default function App() {
   // First-run guide: shown when Ollama is unreachable or no model is installed —
   // otherwise a new user faces an app that silently does nothing. Dismissible.
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [onboardingDismissed, setOnboardingDismissed] = useState(false);
+  // A ref, not state: refreshOllamaStatus is also called from a 15s interval whose
+  // closure is captured once (deps [sidekick]). As state, this read as false forever,
+  // so the onboarding wall reappeared seconds after "Skip for now" and the user could
+  // not get past it. A ref is always current, whoever is reading it.
+  const onboardingDismissedRef = useRef(false);
 
   const deferredSearch = useDeferredValue(searchQuery);
   const messagesRef = useRef(null);
@@ -122,7 +126,7 @@ export default function App() {
     // Nothing to talk to, or nothing to talk with — guide the user rather than
     // leaving them in a workspace that cannot answer.
     const needsSetup = !status.available || (listedModels || []).length === 0;
-    setShowOnboarding(needsSetup && !onboardingDismissed);
+    setShowOnboarding(needsSetup && !onboardingDismissedRef.current);
     if (allSettings) {
       if (allSettings.webSearchEnabled !== undefined) {
         setWebSearchEnabled(allSettings.webSearchEnabled === 'true');
@@ -740,7 +744,7 @@ export default function App() {
       <Onboarding
         sidekick={sidekick}
         onDone={() => {
-          setOnboardingDismissed(true);
+          onboardingDismissedRef.current = true;
           setShowOnboarding(false);
           refreshOllamaStatus().catch(() => {});
         }}
