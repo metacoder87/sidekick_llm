@@ -31,6 +31,15 @@ contextBridge.exposeInMainWorld('sidekick', {
     exportAll: () => ipcRenderer.invoke(channels.chat.exportAll),
     importAll: () => ipcRenderer.invoke(channels.chat.importAll),
   },
+  security: {
+    status: () => ipcRenderer.invoke(channels.security.status),
+    unlock: (payload) => ipcRenderer.invoke(channels.security.unlock, payload),
+    lock: () => ipcRenderer.invoke(channels.security.lock),
+    enable: (payload) => ipcRenderer.invoke(channels.security.enable, payload),
+    disable: (payload) => ipcRenderer.invoke(channels.security.disable, payload),
+    changePassphrase: (payload) => ipcRenderer.invoke(channels.security.changePassphrase, payload),
+    setRemember: (payload) => ipcRenderer.invoke(channels.security.setRemember, payload),
+  },
   system: {
     getIntegrity: () => ipcRenderer.invoke(channels.system.getIntegrity),
     auditList: (options) => ipcRenderer.invoke(channels.system.auditList, options),

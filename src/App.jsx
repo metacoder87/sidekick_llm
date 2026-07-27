@@ -8,6 +8,7 @@ import Sidebar from './components/Sidebar';
 import SpecialistModal from './components/SpecialistModal';
 import SpecialistPickerModal from './components/SpecialistPickerModal';
 import ExpertLibraryModal from './components/ExpertLibraryModal';
+import LockScreen from './components/LockScreen';
 import ThemeToggle from './components/ThemeToggle';
 
 function moveConversationToFront(items, conversation) {
@@ -69,6 +70,10 @@ export default function App() {
   // Drag-and-drop document ingestion state.
   const [isDragging, setIsDragging] = useState(false);
   const [isIngestingDrop, setIsIngestingDrop] = useState(false);
+
+  // Security: null until we have asked the main process. When the corpus is
+  // encrypted and not yet opened, the whole app is replaced by the lock screen.
+  const [security, setSecurity] = useState(null);
 
   const deferredSearch = useDeferredValue(searchQuery);
   const messagesRef = useRef(null);
@@ -207,16 +212,34 @@ export default function App() {
     }
   }
 
+  // Ask whether the corpus is locked BEFORE bootstrapping — every other IPC call is
+  // refused while locked, so bootstrapping first would just produce errors.
   useEffect(() => {
     if (!sidekick) {
       setNotice('Desktop bridge unavailable. Restart the app to reload the Electron preload script.');
       return;
     }
 
-    bootstrap().catch((error) => {
-      setNotice(error.message);
-    });
+    sidekick.security
+      .status()
+      .then((status) => {
+        setSecurity(status);
+        if (!status.locked) {
+          bootstrap().catch((error) => setNotice(error.message));
+        }
+      })
+      .catch(() => {
+        // Older preload without the security surface: behave as before.
+        setSecurity({ locked: false, encrypted: false });
+        bootstrap().catch((error) => setNotice(error.message));
+      });
   }, [sidekick]);
+
+  // Called by the lock screen once the passphrase opens the corpus.
+  async function handleUnlocked(status) {
+    setSecurity(status);
+    await bootstrap().catch((error) => setNotice(error.message));
+  }
 
   useEffect(() => {
     if (!sidekick) {
@@ -668,6 +691,12 @@ export default function App() {
     } catch (error) {
       setNotice(`Import failed: ${error.message}`);
     }
+  }
+
+  // Locked corpus: nothing else may render. The main process independently refuses
+  // every non-security IPC call, so this is a genuine gate, not just a cover.
+  if (security && security.locked) {
+    return <LockScreen sidekick={sidekick} status={security} onUnlocked={handleUnlocked} />;
   }
 
   const activeTitle = activeConversation?.title || 'New Conversation';

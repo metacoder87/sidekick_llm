@@ -27,6 +27,15 @@
     "auditVerify": "system:auditVerify",
     "auditExport": "system:auditExport"
   },
+  "security": {
+    "status": "security:status",
+    "unlock": "security:unlock",
+    "lock": "security:lock",
+    "enable": "security:enable",
+    "disable": "security:disable",
+    "changePassphrase": "security:changePassphrase",
+    "setRemember": "security:setRemember"
+  },
   "settings": {
     "get": "settings:get",
     "set": "settings:set"

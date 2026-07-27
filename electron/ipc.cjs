@@ -1,11 +1,17 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { dialog, ipcMain } = require('electron');
+const fsSync = require('node:fs');
+const { dialog, ipcMain, safeStorage } = require('electron');
 
 const channels = require('../shared/channels.json');
 const expertCatalog = require('../shared/expertCatalog.json');
-const { ConversationRepository } = require('./repository.cjs');
+const {
+  ConversationRepository,
+  isDatabaseEncrypted,
+  canOpenWithPassphrase,
+  rekeyDatabase,
+} = require('./repository.cjs');
 const { OllamaService } = require('./ollama.cjs');
 const { MemoryManager } = require('./memory/memoryManager.cjs');
 const { DeepResearchWorker } = require('./research/deepResearch.cjs');
@@ -18,29 +24,232 @@ function stampFilename(prefix) {
 }
 
 function registerIpcHandlers({ userDataPath }) {
-  const repository = new ConversationRepository(path.join(userDataPath, 'sidekick.db'));
+  const dbPath = path.join(userDataPath, 'sidekick.db');
+  // Where the OS-keychain-wrapped passphrase lives when "remember on this device"
+  // is enabled. It holds an encrypted blob, never the passphrase itself.
+  const keyCachePath = path.join(userDataPath, 'sidekick.keycache');
+
+  // When the corpus is encrypted the repository CANNOT be opened until the user
+  // supplies a passphrase, so construction is deferred. Everything that holds a
+  // repository reference is built at the same moment (handlers read these variables
+  // at call time, so they pick up the real instances once assigned).
+  let repository = null;
+  let memoryManager = null;
+  let researchWorker = null;
+
   const ollama = new OllamaService({
-    getBaseUrl: () => repository.getSetting('ollamaBaseUrl'),
+    getBaseUrl: () =>
+      (repository && repository.getSetting('ollamaBaseUrl')) || 'http://localhost:11434',
   });
-  const memoryManager = new MemoryManager({ repository, ollama });
-  const researchWorker = new DeepResearchWorker({ repository, ollama });
+
   const activeGenerations = new Map();
   // requestIds for which the user pressed "Answer now": the orchestrator checks this
   // between turns to skip remaining rounds and go straight to the moderator.
   const wrapUpRequests = new Set();
 
-  // Record the session opening, and any integrity problem, as the first audit
-  // entries — a gap in the session record is itself a signal.
-  repository.appendAudit({ action: 'app.open', detail: `schema v${repository.getSchemaVersion()}` });
-  if (repository.integrity && repository.integrity.ok === false) {
-    repository.appendAudit({ action: 'integrity.failed', detail: repository.integrity.detail });
+  function openRepository(passphrase = null) {
+    repository = new ConversationRepository(dbPath, { passphrase });
+    memoryManager = new MemoryManager({ repository, ollama });
+    researchWorker = new DeepResearchWorker({ repository, ollama });
+
+    // Record the session opening, and any integrity problem, as the first audit
+    // entries — a gap in the session record is itself a signal.
+    repository.appendAudit({ action: 'app.open', detail: `schema v${repository.getSchemaVersion()}` });
+    if (repository.integrity && repository.integrity.ok === false) {
+      repository.appendAudit({ action: 'integrity.failed', detail: repository.integrity.detail });
+    }
+    return repository;
   }
 
-  ipcMain.handle(channels.models.list, async () => {
+  function closeRepository() {
+    try { if (repository) repository.close(); } catch (_e) { /* ignore */ }
+    repository = null;
+    memoryManager = null;
+    researchWorker = null;
+  }
+
+  // Channels that must work while the corpus is locked (the lock screen itself).
+  const UNLOCKED_CHANNELS = new Set(Object.values(channels.security || {}));
+
+  // Every other handler refuses to run while locked, rather than throwing an opaque
+  // null-reference error. The renderer shows the lock screen on this signal.
+  function handleSecure(channel, fn) {
+    ipcMain.handle(channel, async (...args) => {
+      if (!repository && !UNLOCKED_CHANNELS.has(channel)) {
+        const error = new Error('Sidekick is locked — unlock with your passphrase to continue.');
+        error.code = 'LOCKED';
+        throw error;
+      }
+      return fn(...args);
+    });
+  }
+
+  // A plaintext corpus opens immediately; an encrypted one waits for the passphrase.
+  if (!isDatabaseEncrypted(dbPath)) {
+    openRepository(null);
+  }
+
+  // ---- Security: app lock & encryption at rest ----------------------------------
+  // "Remember on this device" wraps the passphrase with the OS keychain via
+  // safeStorage. The plaintext passphrase is never written to disk, and the cache is
+  // useless on another machine or another OS account.
+  function cacheRemembered(passphrase) {
+    try {
+      if (!safeStorage.isEncryptionAvailable()) return false;
+      fsSync.writeFileSync(keyCachePath, safeStorage.encryptString(passphrase));
+      return true;
+    } catch (error) {
+      console.error('Could not remember passphrase:', error.message);
+      return false;
+    }
+  }
+
+  function readRemembered() {
+    try {
+      if (!fsSync.existsSync(keyCachePath) || !safeStorage.isEncryptionAvailable()) return null;
+      return safeStorage.decryptString(fsSync.readFileSync(keyCachePath));
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function forgetRemembered() {
+    try { fsSync.rmSync(keyCachePath, { force: true }); } catch (_e) { /* ignore */ }
+  }
+
+  function securityStatus() {
+    const encrypted = isDatabaseEncrypted(dbPath);
+    return {
+      encrypted,
+      unlocked: Boolean(repository),
+      // Locked only means "encrypted and not yet opened this session".
+      locked: encrypted && !repository,
+      remembered: fsSync.existsSync(keyCachePath),
+      keychainAvailable: safeStorage.isEncryptionAvailable(),
+    };
+  }
+
+  ipcMain.handle(channels.security.status, async () => securityStatus());
+
+  ipcMain.handle(channels.security.unlock, async (_event, { passphrase, useRemembered = false } = {}) => {
+    if (repository) return { unlocked: true, ...securityStatus() };
+
+    const secret = useRemembered ? readRemembered() : passphrase;
+    if (!secret) {
+      return { unlocked: false, reason: useRemembered ? 'No remembered passphrase on this device.' : 'Enter your passphrase.' };
+    }
+    if (!canOpenWithPassphrase(dbPath, secret)) {
+      // Do not distinguish "wrong passphrase" from "corrupt file" any further than
+      // this — and never log the attempt's input.
+      return { unlocked: false, reason: 'That passphrase did not open the corpus.' };
+    }
+
+    openRepository(secret);
+    repository.appendAudit({ action: 'security.unlock', detail: useRemembered ? 'via device keychain' : 'via passphrase' });
+    return { unlocked: true, ...securityStatus() };
+  });
+
+  ipcMain.handle(channels.security.lock, async () => {
+    if (repository) repository.appendAudit({ action: 'security.lock' });
+    closeRepository();
+    return securityStatus();
+  });
+
+  ipcMain.handle(channels.security.enable, async (_event, { passphrase, remember = false } = {}) => {
+    if (isDatabaseEncrypted(dbPath)) {
+      return { ok: false, reason: 'The corpus is already encrypted.' };
+    }
+    if (!passphrase || passphrase.length < 8) {
+      return { ok: false, reason: 'Choose a passphrase of at least 8 characters.' };
+    }
+
+    // The rekey rewrites every page, so the database must be closed first.
+    if (repository) repository.appendAudit({ action: 'security.encrypt.start' });
+    closeRepository();
+
+    try {
+      const result = rekeyDatabase({ filename: dbPath, newPassphrase: passphrase, backupTag: 'encrypt' });
+      openRepository(passphrase);
+      repository.appendAudit({ action: 'security.encrypt.done', detail: `backup ${result.backupPath}` });
+      if (remember) cacheRemembered(passphrase);
+      return { ok: true, backupPath: result.backupPath, ...securityStatus() };
+    } catch (error) {
+      // Reopen whatever state the corpus is in so the app is never left dead.
+      try { openRepository(isDatabaseEncrypted(dbPath) ? passphrase : null); } catch (_e) { /* stays locked */ }
+      return { ok: false, reason: error.message };
+    }
+  });
+
+  ipcMain.handle(channels.security.disable, async (_event, { passphrase } = {}) => {
+    if (!isDatabaseEncrypted(dbPath)) {
+      return { ok: false, reason: 'The corpus is not encrypted.' };
+    }
+    if (!canOpenWithPassphrase(dbPath, passphrase)) {
+      return { ok: false, reason: 'That passphrase did not open the corpus.' };
+    }
+
+    closeRepository();
+    try {
+      const result = rekeyDatabase({ filename: dbPath, currentPassphrase: passphrase, newPassphrase: '', backupTag: 'decrypt' });
+      forgetRemembered();
+      openRepository(null);
+      repository.appendAudit({ action: 'security.decrypt.done', detail: `backup ${result.backupPath}` });
+      return { ok: true, backupPath: result.backupPath, ...securityStatus() };
+    } catch (error) {
+      try { openRepository(isDatabaseEncrypted(dbPath) ? passphrase : null); } catch (_e) { /* stays locked */ }
+      return { ok: false, reason: error.message };
+    }
+  });
+
+  ipcMain.handle(channels.security.changePassphrase, async (_event, { currentPassphrase, newPassphrase, remember = false } = {}) => {
+    if (!isDatabaseEncrypted(dbPath)) {
+      return { ok: false, reason: 'The corpus is not encrypted.' };
+    }
+    if (!newPassphrase || newPassphrase.length < 8) {
+      return { ok: false, reason: 'Choose a passphrase of at least 8 characters.' };
+    }
+    if (!canOpenWithPassphrase(dbPath, currentPassphrase)) {
+      return { ok: false, reason: 'The current passphrase is incorrect.' };
+    }
+
+    closeRepository();
+    try {
+      const result = rekeyDatabase({
+        filename: dbPath,
+        currentPassphrase,
+        newPassphrase,
+        backupTag: 'rekey',
+      });
+      openRepository(newPassphrase);
+      repository.appendAudit({ action: 'security.passphrase.changed', detail: `backup ${result.backupPath}` });
+      forgetRemembered();
+      if (remember) cacheRemembered(newPassphrase);
+      return { ok: true, backupPath: result.backupPath, ...securityStatus() };
+    } catch (error) {
+      try { openRepository(currentPassphrase); } catch (_e) { /* stays locked */ }
+      return { ok: false, reason: error.message };
+    }
+  });
+
+  ipcMain.handle(channels.security.setRemember, async (_event, { remember, passphrase } = {}) => {
+    if (!remember) {
+      forgetRemembered();
+      if (repository) repository.appendAudit({ action: 'security.forgetDevice' });
+      return securityStatus();
+    }
+    if (!isDatabaseEncrypted(dbPath) || !canOpenWithPassphrase(dbPath, passphrase)) {
+      return { ...securityStatus(), error: 'A correct passphrase is required to remember it.' };
+    }
+    cacheRemembered(passphrase);
+    if (repository) repository.appendAudit({ action: 'security.rememberDevice' });
+    return securityStatus();
+  });
+
+  handleSecure(channels.models.list, async () => {
     return ollama.listModels();
   });
 
-  ipcMain.handle(channels.models.getActive, async () => {
+  handleSecure(channels.models.getActive, async () => {
     const savedModel = repository.getSetting('activeModel');
     if (savedModel) {
       return savedModel;
@@ -54,21 +263,21 @@ function registerIpcHandlers({ userDataPath }) {
     return firstModel;
   });
 
-  ipcMain.handle(channels.models.setActive, async (_event, modelName) => {
+  handleSecure(channels.models.setActive, async (_event, modelName) => {
     repository.setSetting('activeModel', modelName);
     return modelName;
   });
 
-  ipcMain.handle(channels.ollama.status, async () => {
+  handleSecure(channels.ollama.status, async () => {
     return ollama.getStatus();
   });
 
   // Settings Handlers
-  ipcMain.handle(channels.settings.get, async () => {
+  handleSecure(channels.settings.get, async () => {
     return repository.getAllSettings();
   });
 
-  ipcMain.handle(channels.settings.set, async (_event, { key, value }) => {
+  handleSecure(channels.settings.set, async (_event, { key, value }) => {
     // Record that a setting changed, but never the value of a secret.
     const isSecret = /apikey$/i.test(key);
     repository.appendAudit({
@@ -80,32 +289,32 @@ function registerIpcHandlers({ userDataPath }) {
   });
 
   // Profile Handlers
-  ipcMain.handle(channels.profile.get, async () => {
+  handleSecure(channels.profile.get, async () => {
     return repository.getUserProfile();
   });
 
-  ipcMain.handle(channels.profile.set, async (_event, profileObj) => {
+  handleSecure(channels.profile.set, async (_event, profileObj) => {
     return repository.setUserProfile(profileObj);
   });
 
   // Specialist Hub Handlers
-  ipcMain.handle(channels.specialist.list, async () => {
+  handleSecure(channels.specialist.list, async () => {
     return repository.listSpecialistHubs();
   });
 
-  ipcMain.handle(channels.specialist.get, async (_event, id) => {
+  handleSecure(channels.specialist.get, async (_event, id) => {
     return repository.getSpecialistHub(id);
   });
 
-  ipcMain.handle(channels.specialist.create, async (_event, hubData) => {
+  handleSecure(channels.specialist.create, async (_event, hubData) => {
     return repository.createSpecialistHub(hubData);
   });
 
-  ipcMain.handle(channels.specialist.update, async (_event, hubData) => {
+  handleSecure(channels.specialist.update, async (_event, hubData) => {
     return repository.updateSpecialistHub(hubData);
   });
 
-  ipcMain.handle(channels.specialist.delete, async (_event, id) => {
+  handleSecure(channels.specialist.delete, async (_event, id) => {
     const hub = repository.getSpecialistHub(id);
     const success = repository.deleteSpecialistHub(id);
     if (success) {
@@ -119,11 +328,11 @@ function registerIpcHandlers({ userDataPath }) {
 
   // Notes: editable knowledge attached to an Expert. Every write re-embeds the note
   // so what the model can retrieve always matches what the user wrote.
-  ipcMain.handle(channels.notes.list, async (_event, hubId) => {
+  handleSecure(channels.notes.list, async (_event, hubId) => {
     return repository.listNotes(hubId);
   });
 
-  ipcMain.handle(channels.notes.create, async (_event, payload) => {
+  handleSecure(channels.notes.create, async (_event, payload) => {
     const embeddingModel = repository.getSetting('embeddingModel');
     const preflight = await ollama.checkEmbedding(embeddingModel);
     const note = repository.createNote(payload);
@@ -134,7 +343,7 @@ function registerIpcHandlers({ userDataPath }) {
     return { note, indexed: result.success, reason: result.reason, chunksCount: result.chunksCount };
   });
 
-  ipcMain.handle(channels.notes.update, async (_event, payload) => {
+  handleSecure(channels.notes.update, async (_event, payload) => {
     const note = repository.updateNote(payload);
     if (!note) {
       throw new Error('Note not found.');
@@ -148,7 +357,7 @@ function registerIpcHandlers({ userDataPath }) {
     return { note, indexed: result.success, reason: result.reason, chunksCount: result.chunksCount };
   });
 
-  ipcMain.handle(channels.notes.delete, async (_event, id) => {
+  handleSecure(channels.notes.delete, async (_event, id) => {
     const note = repository.getNote(id);
     const success = repository.deleteNote(id);
     if (success) repository.appendAudit({ action: 'note.delete', detail: note ? note.title : id });
@@ -159,7 +368,7 @@ function registerIpcHandlers({ userDataPath }) {
   // research brief; installing creates the Expert instantly and (optionally) runs
   // that research on THIS machine, so no third-party content is redistributed
   // (ROADMAP Stage 7 — licensing).
-  ipcMain.handle(channels.specialist.catalog, async () => {
+  handleSecure(channels.specialist.catalog, async () => {
     const installed = repository.listSpecialistHubs().map((hub) => hub.name.toLowerCase());
     return {
       ...expertCatalog,
@@ -170,7 +379,7 @@ function registerIpcHandlers({ userDataPath }) {
     };
   });
 
-  ipcMain.handle(channels.specialist.installFromCatalog, async (event, { templateId, runResearch = true }) => {
+  handleSecure(channels.specialist.installFromCatalog, async (event, { templateId, runResearch = true }) => {
     const template = expertCatalog.templates.find((t) => t.id === templateId);
     if (!template) {
       throw new Error('Unknown Expert template.');
@@ -228,7 +437,7 @@ function registerIpcHandlers({ userDataPath }) {
   });
 
   // Expert Packs: share, back up, or install a single Expert.
-  ipcMain.handle(channels.specialist.exportPack, async (_event, hubId) => {
+  handleSecure(channels.specialist.exportPack, async (_event, hubId) => {
     const pack = repository.exportExpertPack(hubId);
     if (!pack) {
       throw new Error('Expert not found.');
@@ -253,7 +462,7 @@ function registerIpcHandlers({ userDataPath }) {
     return { saved: true, filePath: target.filePath, manifest: pack.manifest };
   });
 
-  ipcMain.handle(channels.specialist.importPack, async () => {
+  handleSecure(channels.specialist.importPack, async () => {
     const result = await dialog.showOpenDialog({
       title: 'Install Expert Pack',
       filters: [{ name: 'Sidekick Expert Pack', extensions: ['json'] }],
@@ -280,7 +489,7 @@ function registerIpcHandlers({ userDataPath }) {
     return { imported: true, ...outcome };
   });
 
-  ipcMain.handle(channels.specialist.reindex, async (event, { hubId }) => {
+  handleSecure(channels.specialist.reindex, async (event, { hubId }) => {
     const embeddingModel = repository.getSetting('embeddingModel');
     const preflight = await ollama.checkEmbedding(embeddingModel);
     if (!preflight.ok) {
@@ -297,7 +506,7 @@ function registerIpcHandlers({ userDataPath }) {
   });
 
   // Deep Research & Document Ingestion Handlers
-  ipcMain.handle(channels.research.start, async (event, { hubId, topic, seedUrls, depth }) => {
+  handleSecure(channels.research.start, async (event, { hubId, topic, seedUrls, depth }) => {
     let model = repository.getSetting('activeModel');
     if (!model) {
       const models = await ollama.listModels();
@@ -336,7 +545,7 @@ function registerIpcHandlers({ userDataPath }) {
   // Drop a document straight into the conversation: ingest it immediately into a new
   // Expert named after the file, so the user can ask about it in seconds instead of
   // first learning what an Expert is. This is the cold-start fix (ROADMAP §5a).
-  ipcMain.handle(channels.research.quickIngest, async (event, { filePaths = [], hubId = null }) => {
+  handleSecure(channels.research.quickIngest, async (event, { filePaths = [], hubId = null }) => {
     const paths = filePaths.filter((p) => typeof p === 'string' && p.trim());
     if (paths.length === 0) {
       return { success: false, reason: 'No readable file was dropped.' };
@@ -419,7 +628,7 @@ function registerIpcHandlers({ userDataPath }) {
     };
   });
 
-  ipcMain.handle(channels.research.ingestFile, async (event, { hubId }) => {
+  handleSecure(channels.research.ingestFile, async (event, { hubId }) => {
     const result = await dialog.showOpenDialog({
       title: 'Select PDF or Text Document for Specialist Vault',
       filters: [
@@ -458,51 +667,51 @@ function registerIpcHandlers({ userDataPath }) {
   });
 
   // Memory Handlers
-  ipcMain.handle(channels.memory.list, async () => {
+  handleSecure(channels.memory.list, async () => {
     return repository.listUserMemories();
   });
 
-  ipcMain.handle(channels.memory.add, async (_event, payload) => {
+  handleSecure(channels.memory.add, async (_event, payload) => {
     return repository.addUserMemory(payload);
   });
 
-  ipcMain.handle(channels.memory.update, async (_event, payload) => {
+  handleSecure(channels.memory.update, async (_event, payload) => {
     return repository.updateUserMemory(payload);
   });
 
-  ipcMain.handle(channels.memory.delete, async (_event, id) => {
+  handleSecure(channels.memory.delete, async (_event, id) => {
     const success = repository.deleteUserMemory(id);
     if (success) repository.appendAudit({ action: 'memory.delete', detail: id });
     return { success };
   });
 
-  ipcMain.handle(channels.chat.createConversation, async (_event, title) => {
+  handleSecure(channels.chat.createConversation, async (_event, title) => {
     return repository.createConversation(title);
   });
 
-  ipcMain.handle(channels.chat.listConversations, async () => {
+  handleSecure(channels.chat.listConversations, async () => {
     return repository.listConversations();
   });
 
-  ipcMain.handle(channels.chat.getConversation, async (_event, conversationId) => {
+  handleSecure(channels.chat.getConversation, async (_event, conversationId) => {
     return repository.getConversation(conversationId);
   });
 
-  ipcMain.handle(channels.chat.renameConversation, async (_event, payload) => {
+  handleSecure(channels.chat.renameConversation, async (_event, payload) => {
     return repository.renameConversation(payload.conversationId, payload.title);
   });
 
-  ipcMain.handle(channels.chat.deleteConversation, async (_event, conversationId) => {
+  handleSecure(channels.chat.deleteConversation, async (_event, conversationId) => {
     const success = repository.deleteConversation(conversationId);
     if (success) repository.appendAudit({ action: 'conversation.delete', detail: conversationId });
     return { success };
   });
 
-  ipcMain.handle(channels.chat.searchConversations, async (_event, query) => {
+  handleSecure(channels.chat.searchConversations, async (_event, query) => {
     return repository.searchConversations(query);
   });
 
-  ipcMain.handle(channels.chat.sendMessageStream, async (event, payload) => {
+  handleSecure(channels.chat.sendMessageStream, async (event, payload) => {
     const content = payload.content.trim();
     if (!content) {
       throw new Error('Message content cannot be empty.');
@@ -803,7 +1012,7 @@ function registerIpcHandlers({ userDataPath }) {
 
   // "Answer now": stop going around the table and have the moderator wrap up. The
   // orchestrator checks this between turns, so the turn in flight still completes.
-  ipcMain.handle(channels.chat.answerNow, async (_event, requestId) => {
+  handleSecure(channels.chat.answerNow, async (_event, requestId) => {
     if (!activeGenerations.has(requestId)) {
       return { requested: false };
     }
@@ -811,7 +1020,7 @@ function registerIpcHandlers({ userDataPath }) {
     return { requested: true };
   });
 
-  ipcMain.handle(channels.chat.cancelGeneration, async (_event, requestId) => {
+  handleSecure(channels.chat.cancelGeneration, async (_event, requestId) => {
     const controller = activeGenerations.get(requestId);
     if (!controller) {
       return { cancelled: false };
@@ -821,7 +1030,7 @@ function registerIpcHandlers({ userDataPath }) {
     return { cancelled: true };
   });
 
-  ipcMain.handle(channels.chat.exportConversation, async (_event, conversationId) => {
+  handleSecure(channels.chat.exportConversation, async (_event, conversationId) => {
     const payload = repository.exportConversation(conversationId);
     if (!payload) {
       throw new Error('Conversation not found.');
@@ -840,7 +1049,7 @@ function registerIpcHandlers({ userDataPath }) {
     return { saved: true, filePath: target.filePath };
   });
 
-  ipcMain.handle(channels.chat.importAll, async () => {
+  handleSecure(channels.chat.importAll, async () => {
     const result = await dialog.showOpenDialog({
       title: 'Import Sidekick corpus (conversations, memory, experts)',
       filters: [{ name: 'JSON', extensions: ['json'] }],
@@ -871,23 +1080,23 @@ function registerIpcHandlers({ userDataPath }) {
     return { imported: true, counts, filePath: result.filePaths[0] };
   });
 
-  ipcMain.handle(channels.system.getIntegrity, async () => {
+  handleSecure(channels.system.getIntegrity, async () => {
     return repository.integrity;
   });
 
   // ---- Audit log surface --------------------------------------------------------
-  ipcMain.handle(channels.system.auditList, async (_event, options) => {
+  handleSecure(channels.system.auditList, async (_event, options) => {
     return {
       entries: repository.listAudit(options || {}),
       total: repository.countAudit(),
     };
   });
 
-  ipcMain.handle(channels.system.auditVerify, async () => {
+  handleSecure(channels.system.auditVerify, async () => {
     return repository.verifyAuditChain();
   });
 
-  ipcMain.handle(channels.system.auditExport, async () => {
+  handleSecure(channels.system.auditExport, async () => {
     const verification = repository.verifyAuditChain();
     const payload = {
       app: 'sidekick-llm',
@@ -912,7 +1121,7 @@ function registerIpcHandlers({ userDataPath }) {
     return { saved: true, filePath: target.filePath, verification };
   });
 
-  ipcMain.handle(channels.chat.exportAll, async () => {
+  handleSecure(channels.chat.exportAll, async () => {
     const payload = repository.exportAll();
     const target = await dialog.showSaveDialog({
       defaultPath: stampFilename('sidekick-history'),

@@ -24,6 +24,175 @@ const SERIOUS = new Set([
   'expertPack.export',
 ]);
 
+// Encryption controls. Deliberately blunt about the one irreversible risk: a lost
+// passphrase means a lost corpus, and no amount of UI politeness changes that.
+function EncryptionControls({ sidekick }) {
+  const [sec, setSec] = useState(null);
+  const [pass, setPass] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [remember, setRemember] = useState(false);
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  async function refresh() {
+    if (!sidekick?.security) return;
+    setSec(await sidekick.security.status().catch(() => null));
+  }
+
+  useEffect(() => {
+    refresh();
+  }, [sidekick]);
+
+  if (!sidekick?.security) return null;
+
+  async function enable() {
+    if (pass !== confirm) return setMsg('The two passphrases do not match.');
+    setBusy(true);
+    setMsg('Encrypting your corpus — a backup is taken first…');
+    try {
+      const res = await sidekick.security.enable({ passphrase: pass, remember });
+      setMsg(
+        res.ok
+          ? `✅ Corpus encrypted. Unencrypted backup kept at ${res.backupPath} — move or delete it once you have verified everything works.`
+          : `⚠️ ${res.reason}`,
+      );
+      if (res.ok) { setPass(''); setConfirm(''); setAcknowledged(false); }
+      await refresh();
+    } catch (err) {
+      setMsg(`Error: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disable() {
+    setBusy(true);
+    setMsg('Decrypting your corpus…');
+    try {
+      const res = await sidekick.security.disable({ passphrase: pass });
+      setMsg(res.ok ? `✅ Encryption removed. Backup at ${res.backupPath}` : `⚠️ ${res.reason}`);
+      if (res.ok) setPass('');
+      await refresh();
+    } catch (err) {
+      setMsg(`Error: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function change() {
+    if (pass !== confirm) return setMsg('The two new passphrases do not match.');
+    setBusy(true);
+    setMsg('Changing passphrase…');
+    try {
+      const res = await sidekick.security.changePassphrase({
+        currentPassphrase: document.getElementById('current-pass')?.value || '',
+        newPassphrase: pass,
+        remember,
+      });
+      setMsg(res.ok ? '✅ Passphrase changed.' : `⚠️ ${res.reason}`);
+      if (res.ok) { setPass(''); setConfirm(''); }
+      await refresh();
+    } catch (err) {
+      setMsg(`Error: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="encryption-controls">
+      <h3>Encryption at rest</h3>
+      {msg ? <div className="status-notice-banner">{msg}</div> : null}
+
+      {sec?.encrypted ? (
+        <>
+          <div className="audit-verify audit-verify--ok">
+            🔒 This corpus is encrypted. It cannot be opened without your passphrase.
+          </div>
+
+          <label className="form-field">
+            <span>Current passphrase</span>
+            <input id="current-pass" type="password" placeholder="Current passphrase" disabled={busy} />
+          </label>
+          <label className="form-field">
+            <span>New passphrase (leave blank to only remove encryption)</span>
+            <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} disabled={busy} />
+          </label>
+          <label className="form-field">
+            <span>Confirm new passphrase</span>
+            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} disabled={busy} />
+          </label>
+
+          <div className="modal-actions">
+            <button type="button" className="secondary-button" onClick={change} disabled={busy || !pass}>
+              Change passphrase
+            </button>
+            <button type="button" className="ghost-button danger" onClick={disable} disabled={busy || !pass}>
+              Remove encryption
+            </button>
+          </div>
+          <p className="modal-description">
+            To remove encryption, enter your current passphrase in the “New passphrase” field
+            and press Remove encryption.
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="modal-description">
+            Encrypts the entire database — conversations, Experts, notes and memory — with
+            AES-256. Without the passphrase the file cannot be read, even by copying it to
+            another machine.
+          </p>
+
+          <div className="encryption-warning">
+            <strong>⚠️ There is no recovery.</strong> If you lose this passphrase your corpus
+            is unrecoverable — there is no reset, and I cannot help you get back in. Store it
+            in a password manager, and export your corpus first.
+          </div>
+
+          <label className="form-field">
+            <span>Passphrase (minimum 8 characters)</span>
+            <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} disabled={busy} />
+          </label>
+          <label className="form-field">
+            <span>Confirm passphrase</span>
+            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} disabled={busy} />
+          </label>
+
+          {sec?.keychainAvailable ? (
+            <label className="checkbox-field">
+              <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+              <span>Remember on this device (stored in the OS keychain, not in a file)</span>
+            </label>
+          ) : null}
+
+          <label className="checkbox-field">
+            <input
+              type="checkbox"
+              checked={acknowledged}
+              onChange={(e) => setAcknowledged(e.target.checked)}
+            />
+            <span>I have stored this passphrase somewhere safe and understand it cannot be recovered.</span>
+          </label>
+
+          <div className="modal-actions">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={enable}
+              disabled={busy || !acknowledged || pass.length < 8 || pass !== confirm}
+            >
+              {busy ? 'Encrypting…' : '🔒 Encrypt my corpus'}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function AuditLogPanel({ sidekick }) {
   const [entries, setEntries] = useState([]);
   const [total, setTotal] = useState(0);
@@ -63,6 +232,9 @@ export default function AuditLogPanel({ sidekick }) {
 
   return (
     <div className="audit-panel">
+      <EncryptionControls sidekick={sidekick} />
+
+      <h3 className="audit-heading">Audit log</h3>
       <p className="modal-description">
         An append-only record of sensitive actions — exports, deletions, installs and
         settings changes. Each entry is hash-chained to the one before it, so an edited

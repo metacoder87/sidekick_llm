@@ -1314,3 +1314,107 @@ button:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ---- Lock screen ----------------------------------------------------------- */
+.lock-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-main, #100d0c);
+  z-index: 1000;
+}
+
+.lock-panel {
+  width: min(420px, 90vw);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 28px;
+  border-radius: 16px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-soft);
+  text-align: center;
+}
+
+.lock-panel__brand {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.lock-panel h1 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.lock-panel p {
+  margin: 0;
+  font-size: 0.84rem;
+  opacity: 0.8;
+  line-height: 1.45;
+}
+
+.lock-panel input {
+  width: 100%;
+  text-align: center;
+  font-size: 0.95rem;
+  padding: 10px;
+}
+
+.lock-error {
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  color: #f59e0b;
+}
+
+.lock-hint {
+  font-size: 0.74rem !important;
+  opacity: 0.55 !important;
+  border-top: 1px solid var(--panel-border);
+  padding-top: 10px;
+}
+
+/* ---- Encryption controls --------------------------------------------------- */
+.encryption-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.encryption-controls h3,
+.audit-heading {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.encryption-warning {
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.6);
+  color: #f59e0b;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  opacity: 0.9;
+}
+
+.checkbox-field input {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
