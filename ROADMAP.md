@@ -442,11 +442,11 @@ Stage 4 packaging.
 - [ ] Mark model-weight (unsourced) statements distinctly from grounded ones.
 
 #### Phase 6 — Regression tests (assert *retrievability*, never `success:true`)
-- [ ] `require('pdf-parse')` exposes `PDFParse`; fixture PDF → non-empty text.
-- [ ] Failing embedder → `chunksFailed>0` AND `saveSpecialistChunk` refuses write.
-- [ ] Chunks written at dim A excluded (and *counted excluded*) when queried at dim B.
-- [ ] Round-trip: ingest → retrieve returns ingested text.
-- [ ] Re-index repairs a legacy mixed/empty-vector vault.
+- [x] `require('pdf-parse')` exposes `PDFParse`; fixture PDF → non-empty text.
+- [x] Failing embedder → `chunksFailed>0` AND `saveSpecialistChunk` refuses write.
+- [x] Chunks written at dim A excluded (and *counted excluded*) when queried at dim B.
+- [x] Round-trip: ingest → retrieve returns ingested text.
+- [x] Re-index repairs a legacy mixed/empty-vector vault.
 - [ ] Add a renderer test runner (Vitest) — none exists today.
 
 **STAGE 1 EXIT CRITERIA**
@@ -693,7 +693,7 @@ Experts; no unvetted content ever silently entered a vault.
 trusting Sidekick with medical records, legal contracts, and other sensitive data,
 and a hard prerequisite for any distribution.*
 
-- [ ] **Close the Electron link-handling gap (do FIRST — also gates precise
+- [x] **Close the Electron link-handling gap ✅ SHIPPED with precise citations (do FIRST — also gated
       citations).** Add `setWindowOpenHandler` + a `will-navigate` guard; open
       external links via `shell.openExternal`; deny in-app navigation to remote
       origins; revisit `sandbox: true`; tighten CSP. *Today a clicked link opens a
