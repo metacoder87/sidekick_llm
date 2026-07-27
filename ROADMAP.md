@@ -770,9 +770,17 @@ left on disk for safety — the UI names its path so the user can remove it.
 ### STAGE 5 — Distribution & Commercialization  (scope depends on business model)
 *Goal: a stranger can buy, install, trust, and run it — and you can support it.*
 
-- [ ] **Packaging & delivery:** electron-builder/forge, app icons, installers,
-      **code signing** (Windows Authenticode + macOS notarization), **auto-update**,
-      and **multi-platform builds** (Win/Mac/Linux) for market reach.
+- [~] **Packaging & delivery — BUILDS, NOT YET SIGNED.** electron-builder configured
+      for Win (NSIS) / mac (dmg) / Linux (AppImage); reproducible generated icon;
+      asarUnpack for native SQLite. **Verified: the packaged app launches, loads the
+      cipher driver and initialises schema v8 — 114 MB installer.** electron-updater
+      wired defensively (packaged-only, no auto-download, failures swallowed, no-ops
+      until a publish target exists). See RELEASING.md.
+      - [ ] **Code signing — BLOCKS PUBLIC RELEASE.** Requires purchased certificates
+            (Windows OV/EV ~$200-600/yr on a hardware key or cloud HSM since 2023;
+            Apple Developer $99/yr + notarization). Cannot be solved in code.
+      - [ ] Publish target + release pipeline (GitHub Releases) to activate updates.
+      - [ ] macOS/Linux builds need their own runners (mac cannot be built on Windows).
 - [ ] **License activation:** offline-verifiable signed license files / keys (no
       phone-home required, consistent with the privacy thesis).
 - [ ] **Onboarding / cold-start:** guided first run — check/pull the embedding model,
