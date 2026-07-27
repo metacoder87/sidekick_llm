@@ -704,6 +704,13 @@ and a hard prerequisite for any distribution.*
       - **Library:** `better-sqlite3-multiple-ciphers` (drop-in for `better-sqlite3`,
         bundles AES-256 / SQLCipher-compatible). Industry-standard and the cleanest
         path here; plain `better-sqlite3` cannot do SQLCipher natively.
+        **Feasibility confirmed 2026-07-26:** published at 12.11.1, an EXACT version
+        match with our better-sqlite3 12.11.1 — a true drop-in at the same API level.
+        Requires an electron-rebuild for the Electron 41 ABI (revertible).
+      - **Adoption plan (decided):** the driver swap is safe for existing data (with
+        no key set it reads plaintext databases identically), and encryption stays
+        **opt-in** — the user sets a passphrase, and only then is the corpus rekeyed
+        behind a fresh backup. Nobody is force-migrated.
       - **Key management:** derive the key from a user passphrase via a KDF
         (scrypt/argon2/PBKDF2); optionally cache via Electron `safeStorage`
         (OS keychain) for convenience. The key is never stored in plaintext.
@@ -717,11 +724,14 @@ and a hard prerequisite for any distribution.*
       `safeStorage`) to open the app; the passphrase derives the encryption key.
       This is *device/data protection*, not multi-user auth. Configurable
       auto-lock-on-idle.
-- [ ] **Audit log.** Append-only `audit_log` table recording sensitive actions
+- [x] **Audit log ✅ SHIPPED.** Append-only `audit_log` table recording sensitive actions
       (corpus open, export/import, delete, Expert train/re-index, settings change,
       integrity events) with timestamp + details; optional hash-chain for
       tamper-evidence; a viewer + export in the UI. Directly serves the
-      legal/medical compliance narrative.
+      legal/medical compliance narrative. *Hash-chained (SHA-256 over the previous
+      hash), verified across restarts; edited AND deleted entries both detected with
+      the broken sequence number. Secret values are never recorded. Settings →
+      🔒 Security & Audit shows verification, the entry list, and JSON export.*
 - [ ] **Dependency & supply-chain hygiene:** `npm audit` in CI, pinned/locked deps,
       review of any new native modules.
 
