@@ -9,6 +9,7 @@ import SpecialistModal from './components/SpecialistModal';
 import SpecialistPickerModal from './components/SpecialistPickerModal';
 import ExpertLibraryModal from './components/ExpertLibraryModal';
 import LockScreen from './components/LockScreen';
+import Onboarding from './components/Onboarding';
 import ThemeToggle from './components/ThemeToggle';
 
 function moveConversationToFront(items, conversation) {
@@ -75,6 +76,11 @@ export default function App() {
   // encrypted and not yet opened, the whole app is replaced by the lock screen.
   const [security, setSecurity] = useState(null);
 
+  // First-run guide: shown when Ollama is unreachable or no model is installed —
+  // otherwise a new user faces an app that silently does nothing. Dismissible.
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardingDismissed, setOnboardingDismissed] = useState(false);
+
   const deferredSearch = useDeferredValue(searchQuery);
   const messagesRef = useRef(null);
 
@@ -114,6 +120,11 @@ export default function App() {
     setOllamaStatus(status);
     setModels(listedModels);
     setActiveModel(selectedModel);
+
+    // Nothing to talk to, or nothing to talk with — guide the user rather than
+    // leaving them in a workspace that cannot answer.
+    const needsSetup = !status.available || (listedModels || []).length === 0;
+    setShowOnboarding(needsSetup && !onboardingDismissed);
     if (allSettings) {
       if (allSettings.webSearchEnabled !== undefined) {
         setWebSearchEnabled(allSettings.webSearchEnabled === 'true');
@@ -711,6 +722,20 @@ export default function App() {
   // every non-security IPC call, so this is a genuine gate, not just a cover.
   if (security && security.locked) {
     return <LockScreen sidekick={sidekick} status={security} onUnlocked={handleUnlocked} />;
+  }
+
+  // First run / no models: guide before showing an app that cannot answer.
+  if (showOnboarding) {
+    return (
+      <Onboarding
+        sidekick={sidekick}
+        onDone={() => {
+          setOnboardingDismissed(true);
+          setShowOnboarding(false);
+          refreshOllamaStatus().catch(() => {});
+        }}
+      />
+    );
   }
 
   const activeTitle = activeConversation?.title || 'New Conversation';

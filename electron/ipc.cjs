@@ -1,11 +1,13 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 const fsSync = require('node:fs');
 const { BrowserWindow, dialog, ipcMain, powerMonitor, safeStorage } = require('electron');
 
 const channels = require('../shared/channels.json');
 const expertCatalog = require('../shared/expertCatalog.json');
+const modelCatalog = require('../shared/modelCatalog.json');
 const {
   ConversationRepository,
   isDatabaseEncrypted,
@@ -278,6 +280,67 @@ function registerIpcHandlers({ userDataPath }) {
     cacheRemembered(passphrase);
     if (repository) repository.appendAudit({ action: 'security.rememberDevice' });
     return securityStatus();
+  });
+
+  // ---- Model catalog & downloads --------------------------------------------------
+  // Recommendations are based on total system RAM. GPU VRAM would be a better
+  // signal but cannot be read reliably cross-platform (Windows WMI AdapterRAM
+  // under-reports modern cards — an RTX 5080 reports 4 GB), so we name the GPU and
+  // size on RAM rather than assert a VRAM figure we do not trust.
+  function hardwareProfile() {
+    const totalRamGB = os.totalmem() / 1024 ** 3;
+    return {
+      totalRamGB: Number(totalRamGB.toFixed(1)),
+      freeRamGB: Number((os.freemem() / 1024 ** 3).toFixed(1)),
+      cpuCount: os.cpus().length,
+      cpuModel: os.cpus()[0]?.model?.trim() || 'unknown',
+      platform: process.platform,
+    };
+  }
+
+  // These run while LOCKED too: a first-run user has no corpus yet, and someone with
+  // an encrypted corpus may still need to fix a missing model before unlocking.
+  ipcMain.handle(channels.models.hardware, async () => hardwareProfile());
+
+  ipcMain.handle(channels.models.catalog, async () => {
+    const hardware = hardwareProfile();
+    const installed = await ollama.listModels().catch(() => []);
+    const installedNames = new Set(installed.map((m) => m.name));
+
+    return {
+      hardware,
+      installed: installed.map((m) => m.name),
+      models: modelCatalog.models.map((model) => ({
+        ...model,
+        // Match "llama3.1:8b" against an installed "llama3.1:8b" or "llama3.1:8b-...".
+        installed: [...installedNames].some((n) => n === model.name || n.startsWith(`${model.name}-`)),
+        fits: hardware.totalRamGB >= model.minRamGB,
+        tight: hardware.totalRamGB >= model.minRamGB && hardware.totalRamGB < model.minRamGB * 1.5,
+      })),
+    };
+  });
+
+  ipcMain.handle(channels.models.pull, async (event, { name } = {}) => {
+    if (!name) return { ok: false, reason: 'No model selected.' };
+
+    const controller = new AbortController();
+    activeGenerations.set(`pull:${name}`, controller);
+    try {
+      const result = await ollama.pullModel({
+        name,
+        signal: controller.signal,
+        onProgress: (progress) => {
+          event.sender.send(channels.events.modelPull, { name, ...progress });
+        },
+      });
+      // Only audit once the corpus is open — a first-run pull happens before it is.
+      if (repository && result.ok) {
+        repository.appendAudit({ action: 'model.pull', detail: name });
+      }
+      return result;
+    } finally {
+      activeGenerations.delete(`pull:${name}`);
+    }
   });
 
   handleSecure(channels.models.list, async () => {

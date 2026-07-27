@@ -2,7 +2,10 @@
   "models": {
     "list": "models:list",
     "getActive": "models:getActive",
-    "setActive": "models:setActive"
+    "setActive": "models:setActive",
+    "catalog": "models:catalog",
+    "pull": "models:pull",
+    "hardware": "models:hardware"
   },
   "ollama": {
     "status": "ollama:getStatus"
@@ -81,6 +84,7 @@
     "turnDelta": "events:roundtable-turn-delta",
     "turnComplete": "events:roundtable-turn-complete",
     "researchProgress": "events:research-progress",
-    "locked": "events:security-locked"
+    "locked": "events:security-locked",
+    "modelPull": "events:model-pull"
   }
 }

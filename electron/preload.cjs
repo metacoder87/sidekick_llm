@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld('sidekick', {
     list: () => ipcRenderer.invoke(channels.models.list),
     getActive: () => ipcRenderer.invoke(channels.models.getActive),
     setActive: (modelName) => ipcRenderer.invoke(channels.models.setActive, modelName),
+    catalog: () => ipcRenderer.invoke(channels.models.catalog),
+    pull: (payload) => ipcRenderer.invoke(channels.models.pull, payload),
+    hardware: () => ipcRenderer.invoke(channels.models.hardware),
   },
   ollama: {
     getStatus: () => ipcRenderer.invoke(channels.ollama.status),
@@ -101,6 +104,7 @@ contextBridge.exposeInMainWorld('sidekick', {
     onStreamError: (listener) => subscribe(channels.events.streamError, listener),
     onResearchProgress: (listener) => subscribe(channels.events.researchProgress, listener),
     onLocked: (listener) => subscribe(channels.events.locked, listener),
+    onModelPull: (listener) => subscribe(channels.events.modelPull, listener),
     onTurnStart: (listener) => subscribe(channels.events.turnStart, listener),
     onTurnDelta: (listener) => subscribe(channels.events.turnDelta, listener),
     onTurnComplete: (listener) => subscribe(channels.events.turnComplete, listener),

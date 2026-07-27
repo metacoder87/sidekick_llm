@@ -136,6 +136,82 @@ class OllamaService {
     return payload.message?.content || '';
   }
 
+  // Download a model, reporting progress. Ollama streams NDJSON status lines; the
+  // ones carrying `total`/`completed` are byte counts we can turn into a percentage.
+  // Never throws for a cancelled/failed download — the caller reports it honestly.
+  async pullModel({ name, signal, onProgress = () => {} }) {
+    if (!name) return { ok: false, reason: 'No model name given.' };
+
+    let response;
+    try {
+      response = await fetch(`${this.baseUrl()}/api/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: name, stream: true }),
+        signal,
+      });
+    } catch (error) {
+      return { ok: false, reason: `Cannot reach Ollama: ${error.message}` };
+    }
+
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => '')).slice(0, 200);
+      return { ok: false, reason: `Ollama returned ${response.status}. ${detail}`.trim() };
+    }
+    if (!response.body) {
+      return { ok: true, name };
+    }
+
+    const decoder = new TextDecoder();
+    const reader = response.body.getReader();
+    let buffer = '';
+    let lastError = null;
+
+    const handleLine = (line) => {
+      if (!line.trim()) return;
+      let payload;
+      try {
+        payload = JSON.parse(line);
+      } catch (_error) {
+        return;
+      }
+      if (payload.error) {
+        lastError = payload.error;
+        return;
+      }
+      const total = Number(payload.total) || 0;
+      const completed = Number(payload.completed) || 0;
+      onProgress({
+        status: payload.status || '',
+        total,
+        completed,
+        percent: total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : null,
+      });
+    };
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n');
+        buffer = parts.pop() || '';
+        for (const part of parts) handleLine(part);
+      }
+      if (buffer.trim()) handleLine(buffer);
+    } catch (error) {
+      if (error && error.name === 'AbortError') {
+        return { ok: false, cancelled: true, reason: 'Download cancelled.' };
+      }
+      return { ok: false, reason: error.message };
+    }
+
+    if (lastError) {
+      return { ok: false, reason: lastError };
+    }
+    return { ok: true, name };
+  }
+
   // Pre-flight an embedding model before a long ingest/research run so we can fail
   // fast with an actionable reason instead of scraping for minutes and producing an
   // empty vault (ROADMAP §5 Phase 3). Returns { ok, dim } or { ok:false, reason }.
