@@ -105,6 +105,34 @@ function createWindow() {
   }
 }
 
+// Auto-update is strictly opt-in and must never break a local or unpublished build.
+// It only runs in a packaged app that was built with a publish target, and every
+// failure is swallowed — a user who cannot reach the update server should still get
+// a working offline app, which is the whole point of this product.
+function initAutoUpdate() {
+  if (!app.isPackaged || process.env.SIDEKICK_DISABLE_UPDATES === '1') {
+    return;
+  }
+  try {
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.autoDownload = false; // never consume bandwidth without asking
+    autoUpdater.on('error', (error) => {
+      console.error('Update check failed (non-fatal):', error.message);
+    });
+    autoUpdater.on('update-available', (info) => {
+      console.log('Update available:', info.version);
+      if (mainWindow) {
+        mainWindow.webContents.send('events:update-available', { version: info.version });
+      }
+    });
+    autoUpdater.checkForUpdates().catch(() => {
+      // No publish target configured, or offline. Both are fine.
+    });
+  } catch (error) {
+    console.error('Auto-update unavailable (non-fatal):', error.message);
+  }
+}
+
 async function bootstrap() {
   try {
     const { registerIpcHandlers } = require('./ipc.cjs');
@@ -112,6 +140,7 @@ async function bootstrap() {
       userDataPath: app.getPath('userData'),
     });
     createWindow();
+    initAutoUpdate();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
