@@ -699,8 +699,8 @@ and a hard prerequisite for any distribution.*
       origins; revisit `sandbox: true`; tighten CSP. *Today a clicked link opens a
       window that inherits the preload bridge (`window.sidekick`) — a data-exfil
       path. Flagged in the original audit; still open.*
-- [~] **Encryption at rest (SQLCipher-class) — MECHANISM DONE, UI PENDING.** Whole-file
-      AES-256; nothing is encrypted until a user sets a passphrase.
+- [x] **Encryption at rest (SQLCipher-class) ✅ SHIPPED.** Whole-file AES-256;
+      opt-in, reversible, and nothing is encrypted until a user sets a passphrase.
       - **Library:** `better-sqlite3-multiple-ciphers` (drop-in for `better-sqlite3`,
         bundles AES-256 / SQLCipher-compatible). Industry-standard and the cleanest
         path here; plain `better-sqlite3` cannot do SQLCipher natively.
@@ -720,17 +720,17 @@ and a hard prerequisite for any distribution.*
         an empty passphrase decrypts back to plaintext.
       - **⚠️ Gotcha found by experiment:** SQLite rejects rekey under WAL. The
         operation must drop to journal_mode=DELETE and restore WAL afterwards.
-      - **Remaining for step 2b:** app-lock screen, unlock/enable/disable IPC + UI,
-        safeStorage passphrase caching, and deferring repository construction when
-        the corpus is encrypted (main.cjs currently opens it eagerly at startup).
+      - ✅ **Step 2b done:** lock screen, unlock/enable/disable/change-passphrase IPC
+        + UI, safeStorage (OS keychain) caching, and deferred repository construction
+        with a LOCKED guard on all 46 handlers so the gate is enforced in the main
+        process rather than the renderer.
       - **Threat model (state it honestly):** protects a *stolen laptop / copied
         `.db` / stolen backup*. It does **not** protect against malware running as
         the user. JSON corpus exports are plaintext by design → offer an encrypted
         export option and mark plain exports as sensitive.
-- [ ] **App lock (single-user local gate).** Passphrase (and/or OS biometric via
-      `safeStorage`) to open the app; the passphrase derives the encryption key.
-      This is *device/data protection*, not multi-user auth. Configurable
-      auto-lock-on-idle.
+- [x] **App lock (single-user local gate) ✅ SHIPPED.** Passphrase gate with optional
+      OS-keychain `safeStorage` caching; the passphrase IS the encryption key. Manual
+      lock available. *Auto-lock-on-idle still TODO.*
 - [x] **Audit log ✅ SHIPPED.** Append-only `audit_log` table recording sensitive actions
       (corpus open, export/import, delete, Expert train/re-index, settings change,
       integrity events) with timestamp + details; optional hash-chain for
