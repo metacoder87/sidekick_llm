@@ -8,9 +8,9 @@
     "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
     "build": "vite build",
     "preview": "cross-env PREVIEW=true electron .",
-    "test": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test --experimental-test-isolation=none test/ollama.test.cjs test/search_memory.test.cjs test/repository.test.cjs test/profile_specialist.test.cjs test/context_builder.test.cjs test/roundtable.test.cjs",
+    "test": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test --experimental-test-isolation=none test/ollama.test.cjs test/search_memory.test.cjs test/repository.test.cjs test/profile_specialist.test.cjs test/context_builder.test.cjs test/roundtable.test.cjs test/encryption.test.cjs",
     "test:node": "node --test --experimental-test-isolation=none test/ollama.test.cjs test/search_memory.test.cjs",
-    "test:electron": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test --experimental-test-isolation=none test/repository.test.cjs test/profile_specialist.test.cjs test/context_builder.test.cjs test/roundtable.test.cjs",
+    "test:electron": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test --experimental-test-isolation=none test/repository.test.cjs test/profile_specialist.test.cjs test/context_builder.test.cjs test/roundtable.test.cjs test/encryption.test.cjs",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3,better-sqlite3-multiple-ciphers",
     "postinstall": "npm run rebuild:native"
   },

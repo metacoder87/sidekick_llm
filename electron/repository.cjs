@@ -110,10 +110,107 @@ function toFtsQuery(input) {
     .join(' OR ');
 }
 
+// ---- Encryption at rest (opt-in) ------------------------------------------------
+// The driver encrypts the WHOLE database file (AES-256, SQLCipher-compatible), so
+// there is no plaintext left in tables, indexes, FTS or the WAL. Verified behaviour
+// that shapes this code:
+//   * rekey is REJECTED under WAL — the journal mode must be switched to DELETE for
+//     the operation and restored afterwards.
+//   * an encrypted file no longer starts with "SQLite format 3", which is how we
+//     detect encryption WITHOUT needing the key.
+//   * a wrong key and no key both surface as "file is not a database".
+//   * rekey to an empty string decrypts back to plaintext — encryption is
+//     reversible, not a one-way door.
+const SQLITE_MAGIC = 'SQLite format 3';
+
+// Escape a passphrase for use inside a PRAGMA string literal.
+function quoteKey(passphrase) {
+  return `'${String(passphrase).replace(/'/g, "''")}'`;
+}
+
+// Is this database file encrypted? Reads only the header, so it works with no key.
+function isDatabaseEncrypted(filename) {
+  try {
+    if (!filename || filename === ':memory:' || !fs.existsSync(filename)) return false;
+    const fd = fs.openSync(filename, 'r');
+    const header = Buffer.alloc(16);
+    fs.readSync(fd, header, 0, 16, 0);
+    fs.closeSync(fd);
+    // An empty (0-byte) file is a fresh database, not an encrypted one.
+    if (fs.statSync(filename).size === 0) return false;
+    return header.subarray(0, 15).toString('latin1') !== SQLITE_MAGIC;
+  } catch (_error) {
+    return false;
+  }
+}
+
+// Can this passphrase open the database? Used to validate before unlocking.
+function canOpenWithPassphrase(filename, passphrase) {
+  let db = null;
+  try {
+    db = new Database(filename);
+    if (passphrase) db.pragma(`key = ${quoteKey(passphrase)}`);
+    db.prepare('SELECT count(*) FROM sqlite_master').get();
+    return true;
+  } catch (_error) {
+    return false;
+  } finally {
+    try { if (db) db.close(); } catch (_e) { /* ignore */ }
+  }
+}
+
+// Rekey a CLOSED database file. Handles both directions:
+//   newPassphrase = '<secret>' → encrypt (or change passphrase)
+//   newPassphrase = ''         → decrypt back to plaintext
+// Always takes a backup first: this rewrites every page of the user's corpus.
+function rekeyDatabase({ filename, currentPassphrase = '', newPassphrase = '', backupTag = 'rekey' }) {
+  if (!fs.existsSync(filename)) {
+    throw new Error('Database file not found.');
+  }
+
+  const encrypted = isDatabaseEncrypted(filename);
+  if (encrypted && !currentPassphrase) {
+    throw new Error('The database is encrypted — the current passphrase is required.');
+  }
+  if (!canOpenWithPassphrase(filename, encrypted ? currentPassphrase : '')) {
+    throw new Error('The current passphrase is incorrect.');
+  }
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = `${filename}.bak-${backupTag}-${stamp}`;
+  fs.copyFileSync(filename, backupPath);
+
+  const db = new Database(filename);
+  try {
+    if (encrypted) db.pragma(`key = ${quoteKey(currentPassphrase)}`);
+    // Rekeying is not supported under WAL; drop to DELETE and restore afterwards.
+    db.pragma('journal_mode = DELETE');
+    db.pragma(`rekey = ${newPassphrase ? quoteKey(newPassphrase) : "''"}`);
+    db.pragma('journal_mode = WAL');
+  } finally {
+    try { db.close(); } catch (_e) { /* ignore */ }
+  }
+
+  // Verify the result before telling the user it worked.
+  const nowEncrypted = isDatabaseEncrypted(filename);
+  const opens = canOpenWithPassphrase(filename, newPassphrase);
+  if (!opens || nowEncrypted !== Boolean(newPassphrase)) {
+    throw new Error(
+      `Rekey verification failed — your corpus is unchanged at ${backupPath}. Restore that file.`,
+    );
+  }
+
+  return { backupPath, encrypted: nowEncrypted };
+}
+
 class ConversationRepository {
-  constructor(filename) {
+  constructor(filename, { passphrase = null } = {}) {
     this.filename = filename;
     this.db = new Database(filename);
+    // The key must be applied before ANY other statement touches the file.
+    if (passphrase) {
+      this.db.pragma(`key = ${quoteKey(passphrase)}`);
+    }
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
 
@@ -1893,6 +1990,9 @@ class ConversationRepository {
 
 module.exports = {
   ConversationRepository,
+  isDatabaseEncrypted,
+  canOpenWithPassphrase,
+  rekeyDatabase,
   DEFAULT_TITLE,
   DEFAULT_SETTINGS,
   DEFAULT_PROFILE,
