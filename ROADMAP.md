@@ -699,8 +699,8 @@ and a hard prerequisite for any distribution.*
       origins; revisit `sandbox: true`; tighten CSP. *Today a clicked link opens a
       window that inherits the preload bridge (`window.sidekick`) — a data-exfil
       path. Flagged in the original audit; still open.*
-- [ ] **Encryption at rest (SQLCipher-class).** Encrypt the database, its WAL, and
-      the pre-migration backups.
+- [~] **Encryption at rest (SQLCipher-class) — MECHANISM DONE, UI PENDING.** Whole-file
+      AES-256; nothing is encrypted until a user sets a passphrase.
       - **Library:** `better-sqlite3-multiple-ciphers` (drop-in for `better-sqlite3`,
         bundles AES-256 / SQLCipher-compatible). Industry-standard and the cleanest
         path here; plain `better-sqlite3` cannot do SQLCipher natively.
@@ -714,8 +714,15 @@ and a hard prerequisite for any distribution.*
       - **Key management:** derive the key from a user passphrase via a KDF
         (scrypt/argon2/PBKDF2); optionally cache via Electron `safeStorage`
         (OS keychain) for convenience. The key is never stored in plaintext.
-      - **Migration:** rekey the existing plaintext DB in place (or export→import
-        into an encrypted DB) on first upgrade, behind the backup.
+      - **Migration:** rekey in place behind an automatic backup. ✅ implemented and
+        verified on a copy of the real 6.4 MB corpus (16 conversations / 8 Experts /
+        289 chunks identical before, during and after; 0.2s). Reversible — rekey to
+        an empty passphrase decrypts back to plaintext.
+      - **⚠️ Gotcha found by experiment:** SQLite rejects rekey under WAL. The
+        operation must drop to journal_mode=DELETE and restore WAL afterwards.
+      - **Remaining for step 2b:** app-lock screen, unlock/enable/disable IPC + UI,
+        safeStorage passphrase caching, and deferring repository construction when
+        the corpus is encrypted (main.cjs currently opens it eagerly at startup).
       - **Threat model (state it honestly):** protects a *stolen laptop / copied
         `.db` / stolen backup*. It does **not** protect against malware running as
         the user. JSON corpus exports are plaintext by design → offer an encrypted
