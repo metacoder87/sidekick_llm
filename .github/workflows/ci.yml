@@ -2,11 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [master, "stage*"]
+    branches: [master, 'stage*']
   pull_request:
   # Dependencies rot even when the code does not — catch new advisories weekly.
   schedule:
-    - cron: "0 6 * * 1"
+    - cron: '0 6 * * 1'
 
 jobs:
   test:
@@ -28,8 +28,8 @@ jobs:
 
       # Lint before build: a lint error is cheaper to read than a build failure,
       # and exhaustive-deps catches stale-closure bugs a green build never would.
-      # - name: Lint
-      #   run: npm run lint
+      - name: Lint
+        run: npm run lint
 
       - name: Check formatting
         run: npm run format:check
