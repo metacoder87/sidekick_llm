@@ -19,6 +19,7 @@ const { MemoryManager } = require('./memory/memoryManager.cjs');
 const { DeepResearchWorker } = require('./research/deepResearch.cjs');
 const { buildChatContext } = require('./contextBuilder.cjs');
 const { RoundtableOrchestrator } = require('./roundtable.cjs');
+const { LicenseService } = require('./licenseService.cjs');
 
 function stampFilename(prefix) {
   const value = new Date().toISOString().replace(/[:.]/g, '-');
@@ -38,6 +39,7 @@ function registerIpcHandlers({ userDataPath }) {
   let repository = null;
   let memoryManager = null;
   let researchWorker = null;
+  let licenseService = null;
 
   const ollama = new OllamaService({
     getBaseUrl: () =>
@@ -53,6 +55,7 @@ function registerIpcHandlers({ userDataPath }) {
     repository = new ConversationRepository(dbPath, { passphrase });
     memoryManager = new MemoryManager({ repository, ollama });
     researchWorker = new DeepResearchWorker({ repository, ollama });
+    licenseService = new LicenseService({ repository, safeStorage });
 
     // Record the session opening, and any integrity problem, as the first audit
     // entries — a gap in the session record is itself a signal.
@@ -75,6 +78,7 @@ function registerIpcHandlers({ userDataPath }) {
     repository = null;
     memoryManager = null;
     researchWorker = null;
+    licenseService = null;
   }
 
   // Channels that must work while the corpus is locked (the lock screen itself).
@@ -1308,9 +1312,31 @@ function registerIpcHandlers({ userDataPath }) {
     return { saved: true, filePath: target.filePath };
   });
 
+  // ---- License management surface -----------------------------------------------
+  handleSecure(channels.license.status, async () => {
+    if (!licenseService) return { isLicensed: false, status: 'unlicensed' };
+    return licenseService.getStatus();
+  });
+
+  handleSecure(channels.license.activate, async (_event, licenseKey) => {
+    if (!licenseService) throw new Error('License service unavailable.');
+    return licenseService.activate(licenseKey);
+  });
+
+  handleSecure(channels.license.validate, async () => {
+    if (!licenseService) throw new Error('License service unavailable.');
+    return licenseService.validate();
+  });
+
+  handleSecure(channels.license.deactivate, async () => {
+    if (!licenseService) throw new Error('License service unavailable.');
+    return licenseService.deactivate();
+  });
+
   return {
     repository,
     memoryManager,
+    licenseService,
   };
 }
 

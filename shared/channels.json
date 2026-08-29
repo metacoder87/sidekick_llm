@@ -43,6 +43,12 @@
     "get": "settings:get",
     "set": "settings:set"
   },
+  "license": {
+    "status": "license:status",
+    "activate": "license:activate",
+    "validate": "license:validate",
+    "deactivate": "license:deactivate"
+  },
   "memory": {
     "list": "memory:list",
     "add": "memory:add",

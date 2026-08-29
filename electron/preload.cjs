@@ -56,6 +56,12 @@ contextBridge.exposeInMainWorld('sidekick', {
     get: () => ipcRenderer.invoke(channels.settings.get),
     set: (key, value) => ipcRenderer.invoke(channels.settings.set, { key, value }),
   },
+  license: {
+    status: () => ipcRenderer.invoke(channels.license.status),
+    activate: (licenseKey) => ipcRenderer.invoke(channels.license.activate, licenseKey),
+    validate: () => ipcRenderer.invoke(channels.license.validate),
+    deactivate: () => ipcRenderer.invoke(channels.license.deactivate),
+  },
   memory: {
     list: () => ipcRenderer.invoke(channels.memory.list),
     add: (payload) => ipcRenderer.invoke(channels.memory.add, payload),
