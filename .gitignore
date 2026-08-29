@@ -11,3 +11,5 @@ coverage/
 .venv/
 *.log
 release/
+__pycache__/
+*.pyc
