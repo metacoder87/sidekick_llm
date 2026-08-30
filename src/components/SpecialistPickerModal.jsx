@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 const ICON_MAP = {
   brain: '🧠',
@@ -23,6 +23,17 @@ export default function SpecialistPickerModal({
   const [hubs, setHubs] = useState([]);
   const [packStatus, setPackStatus] = useState('');
 
+  const loadHubs = useCallback(async () => {
+    if (!sidekick) return;
+    try {
+      const list = await sidekick.specialist.list();
+      setHubs(list || []);
+    } catch (error) {
+      console.warn('Could not load Experts:', error.message);
+      setHubs([]);
+    }
+  }, [sidekick]);
+
   // Installing a pack creates a new Expert locally. If the pack's vectors came from
   // a different embedding model they cannot be retrieved until re-indexed — say so
   // plainly rather than handing the user a silently dead vault.
@@ -46,22 +57,11 @@ export default function SpecialistPickerModal({
     }
   }
 
-  async function loadHubs() {
-    if (!sidekick) return;
-    try {
-      const list = await sidekick.specialist.list();
-      setHubs(list || []);
-    } catch (error) {
-      console.warn('Could not load Experts:', error.message);
-      setHubs([]);
-    }
-  }
-
   useEffect(() => {
     if (isOpen) {
       loadHubs();
     }
-  }, [isOpen]);
+  }, [isOpen, loadHubs]);
 
   if (!isOpen) return null;
 

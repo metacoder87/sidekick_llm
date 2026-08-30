@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 // Notes are where the user's own insight accumulates, as opposed to ingested
 // documents. Each note is embedded into the Expert's vault on save, so writing a
@@ -11,18 +11,18 @@ export default function NotesPanel({ sidekick, hubId, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!sidekick || !hubId) return;
     try {
       setNotes((await sidekick.notes.list(hubId)) || []);
     } catch (_e) {
       /* non-fatal */
     }
-  }
+  }, [sidekick, hubId]);
 
   useEffect(() => {
     load();
-  }, [sidekick, hubId]);
+  }, [load]);
 
   function resetForm() {
     setEditingId(null);

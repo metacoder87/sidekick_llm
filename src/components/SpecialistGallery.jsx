@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 const ICON_MAP = {
   brain: '🧠',
@@ -17,7 +17,7 @@ export default function SpecialistGallery({
 }) {
   const [hubs, setHubs] = useState([]);
 
-  async function loadHubs() {
+  const loadHubs = useCallback(async () => {
     if (!sidekick) return;
     try {
       const list = await sidekick.specialist.list();
@@ -25,11 +25,11 @@ export default function SpecialistGallery({
     } catch (_e) {
       // Ignore
     }
-  }
+  }, [sidekick]);
 
   useEffect(() => {
     loadHubs();
-  }, [sidekick]);
+  }, [loadHubs]);
 
   async function handleDeleteHub(e, hubId) {
     e.stopPropagation();

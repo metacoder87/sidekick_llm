@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 export default function MemoryVaultModal({ isOpen, onClose, sidekick }) {
   const [memories, setMemories] = useState([]);
@@ -7,7 +7,7 @@ export default function MemoryVaultModal({ isOpen, onClose, sidekick }) {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
 
-  async function loadMemories() {
+  const loadMemories = useCallback(async () => {
     if (!sidekick) return;
     setLoading(true);
     try {
@@ -18,13 +18,13 @@ export default function MemoryVaultModal({ isOpen, onClose, sidekick }) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [sidekick]);
 
   useEffect(() => {
     if (isOpen) {
       loadMemories();
     }
-  }, [isOpen]);
+  }, [isOpen, loadMemories]);
 
   async function handleAddMemory(e) {
     e.preventDefault();

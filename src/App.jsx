@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useRef, useState } from 'react';
 
 import ChatView from './components/ChatView';
 import Composer from './components/Composer';
@@ -104,7 +104,7 @@ export default function App() {
     }
   }
 
-  async function refreshOllamaStatus() {
+  const refreshOllamaStatus = useCallback(async () => {
     if (!sidekick) {
       setNotice(
         'Desktop bridge unavailable. Restart the app to reload the Electron preload script.',
@@ -141,7 +141,7 @@ export default function App() {
         setRounds(Number(allSettings.roundtableRounds) || 1);
       }
     }
-  }
+  }, [sidekick]);
 
   async function handleToggleWebSearch(enabled) {
     setWebSearchEnabled(enabled);
@@ -150,49 +150,68 @@ export default function App() {
     }
   }
 
-  async function refreshConversationList(query = '') {
-    if (!sidekick) {
-      return;
-    }
-
-    const nextConversations = query
-      ? await sidekick.chat.searchConversations(query)
-      : await sidekick.chat.listConversations();
-
-    setConversations(nextConversations);
-
-    if (!activeConversationId && nextConversations[0]) {
-      await loadConversation(nextConversations[0].id);
-      return;
-    }
-
-    if (
-      activeConversationId &&
-      !nextConversations.some((conversation) => conversation.id === activeConversationId)
-    ) {
-      if (nextConversations[0]) {
-        await loadConversation(nextConversations[0].id);
-      } else {
+  const loadConversation = useCallback(
+    async (conversationId) => {
+      if (!conversationId) {
         setActiveConversation(null);
+        return;
       }
-    }
-  }
 
-  async function loadConversation(conversationId) {
-    if (!conversationId) {
-      setActiveConversation(null);
-      return;
-    }
+      if (!sidekick) {
+        return;
+      }
 
-    if (!sidekick) {
-      return;
-    }
+      const conversation = await sidekick.chat.getConversation(conversationId);
+      setActiveConversation(conversation);
+    },
+    [sidekick],
+  );
 
-    const conversation = await sidekick.chat.getConversation(conversationId);
-    setActiveConversation(conversation);
-  }
+  const refreshConversationList = useCallback(
+    async (query = '') => {
+      if (!sidekick) {
+        return;
+      }
 
-  async function bootstrap() {
+      const nextConversations = query
+        ? await sidekick.chat.searchConversations(query)
+        : await sidekick.chat.listConversations();
+
+      setConversations(nextConversations);
+
+      if (!activeConversationId && nextConversations[0]) {
+        await loadConversation(nextConversations[0].id);
+        return;
+      }
+
+      if (
+        activeConversationId &&
+        !nextConversations.some((conversation) => conversation.id === activeConversationId)
+      ) {
+        if (nextConversations[0]) {
+          await loadConversation(nextConversations[0].id);
+        } else {
+          setActiveConversation(null);
+        }
+      }
+    },
+    [sidekick, activeConversationId, loadConversation],
+  );
+
+  const applySpecialistSelection = useCallback(
+    async (ids) => {
+      setActiveSpecialistIds(ids);
+      if (sidekick) {
+        const list = await sidekick.specialist.list().catch(() => []);
+        const byId = new Map((list || []).map((h) => [h.id, h]));
+        setActiveSpecialistHubs(ids.map((id) => byId.get(id)).filter(Boolean));
+        await sidekick.settings.set('activeSpecialistIds', JSON.stringify(ids));
+      }
+    },
+    [sidekick],
+  );
+
+  const bootstrap = useCallback(async () => {
     await Promise.all([refreshConversationList(), refreshOllamaStatus()]);
 
     // Restore the previously consulted panel of experts (filtered to those that
@@ -225,21 +244,20 @@ export default function App() {
     } catch (_error) {
       // Integrity channel unavailable (older preload); non-fatal.
     }
-  }
+  }, [refreshConversationList, refreshOllamaStatus, sidekick, applySpecialistSelection]);
 
   // Ask whether the corpus is locked BEFORE bootstrapping — every other IPC call is
   // refused while locked, so bootstrapping first would just produce errors.
   useEffect(() => {
     if (!sidekick) {
-      setNotice(
-        'Desktop bridge unavailable. Restart the app to reload the Electron preload script.',
-      );
-      return;
+      return undefined;
     }
 
+    let isCurrent = true;
     sidekick.security
       .status()
       .then((status) => {
+        if (!isCurrent) return;
         setSecurity(status);
         if (!status.locked) {
           bootstrap().catch((error) => setNotice(error.message));
@@ -247,10 +265,15 @@ export default function App() {
       })
       .catch(() => {
         // Older preload without the security surface: behave as before.
+        if (!isCurrent) return;
         setSecurity({ locked: false, encrypted: false });
         bootstrap().catch((error) => setNotice(error.message));
       });
-  }, [sidekick]);
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [sidekick, bootstrap]);
 
   // Called by the lock screen once the passphrase opens the corpus.
   async function handleUnlocked(status) {
@@ -280,7 +303,7 @@ export default function App() {
     refreshConversationList(deferredSearch).catch((error) => {
       setNotice(error.message);
     });
-  }, [deferredSearch, sidekick]);
+  }, [deferredSearch, sidekick, refreshConversationList]);
 
   useEffect(() => {
     if (!sidekick) {
@@ -292,7 +315,7 @@ export default function App() {
     }, 15000);
 
     return () => clearInterval(updateTimer);
-  }, [sidekick]);
+  }, [sidekick, refreshOllamaStatus]);
 
   useEffect(() => {
     messagesRef.current?.scrollTo({
@@ -518,18 +541,6 @@ export default function App() {
 
     await sidekick.models.setActive(modelName);
     setActiveModel(modelName);
-  }
-
-  // Reflect a set of selected ids into hub objects (for header/badges) and persist
-  // the selection so a consulting panel survives restarts.
-  async function applySpecialistSelection(ids) {
-    setActiveSpecialistIds(ids);
-    if (sidekick) {
-      const list = await sidekick.specialist.list().catch(() => []);
-      const byId = new Map((list || []).map((h) => [h.id, h]));
-      setActiveSpecialistHubs(ids.map((id) => byId.get(id)).filter(Boolean));
-      await sidekick.settings.set('activeSpecialistIds', JSON.stringify(ids));
-    }
   }
 
   // Toggle one expert in/out of the panel. `null` clears the whole panel

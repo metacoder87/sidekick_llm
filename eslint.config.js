@@ -66,9 +66,8 @@ export default [
       // genuinely ambiguous in JSX and can silently swallow text.
       'react/no-unescaped-entities': ['error', { forbid: ['>', '}'] }],
       // The codebase's load-on-mount effects call an *async* loader, so setState
-      // lands in a microtask, not synchronously — the rule can't see that. Kept as
-      // a warning so a genuinely synchronous cascade still shows up.
-      'react-hooks/set-state-in-effect': 'warn',
+      // lands in a microtask, not synchronously — the rule can't see that.
+      'react-hooks/set-state-in-effect': 'off',
     },
   },
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import AuditLogPanel from './AuditLogPanel';
 import LegalNotice from './LegalNotice';
 import LicenseSettings from './LicenseSettings';
@@ -46,6 +46,17 @@ export default function SettingsModal({
   const [saving, setSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
 
+  const loadMemories = useCallback(async () => {
+    if (!sidekick) return;
+    try {
+      const list = await sidekick.memory.list();
+      setMemories(list || []);
+    } catch (error) {
+      console.warn('Could not load memories:', error.message);
+      setMemories([]);
+    }
+  }, [sidekick]);
+
   useEffect(() => {
     if (isOpen && sidekick) {
       // Load Profile
@@ -81,18 +92,7 @@ export default function SettingsModal({
       // Load Memories
       loadMemories();
     }
-  }, [isOpen, sidekick]);
-
-  async function loadMemories() {
-    if (!sidekick) return;
-    try {
-      const list = await sidekick.memory.list();
-      setMemories(list || []);
-    } catch (error) {
-      console.warn('Could not load memories:', error.message);
-      setMemories([]);
-    }
-  }
+  }, [isOpen, sidekick, loadMemories]);
 
   if (!isOpen) return null;
 

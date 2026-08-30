@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Privacy-first desktop knowledge system for local LLMs — AI Experts, grounded citations, and a corpus you own.",
   "main": "electron/main.cjs",
+  "type": "module",
   "scripts": {
     "predev": "npm run rebuild:native",
     "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",

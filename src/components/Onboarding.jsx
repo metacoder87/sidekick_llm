@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { DisclaimerSummary } from './LegalNotice';
 
 // First-run guide. Shown when Ollama is unreachable or no usable model is installed —
@@ -12,18 +12,18 @@ export default function Onboarding({ sidekick, onDone }) {
   const [progress, setProgress] = useState(null);
   const [error, setError] = useState('');
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     if (!sidekick) return;
     const status = await sidekick.ollama.getStatus().catch(() => ({ available: false }));
     setOllamaUp(status.available);
     if (status.available) {
       setCatalog(await sidekick.models.catalog().catch(() => null));
     }
-  }
+  }, [sidekick]);
 
   useEffect(() => {
     refresh();
-  }, [sidekick]);
+  }, [refresh]);
 
   useEffect(() => {
     if (!sidekick?.events?.onModelPull) return undefined;

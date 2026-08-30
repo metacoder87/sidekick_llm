@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 const ACTION_LABELS = {
   'app.open': 'App opened',
@@ -36,16 +36,16 @@ function EncryptionControls({ sidekick }) {
   const [msg, setMsg] = useState('');
   const [autoLock, setAutoLock] = useState('0');
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     if (!sidekick?.security) return;
     setSec(await sidekick.security.status().catch(() => null));
     const settings = await sidekick.settings.get().catch(() => null);
     if (settings?.autoLockMinutes) setAutoLock(String(settings.autoLockMinutes));
-  }
+  }, [sidekick]);
 
   useEffect(() => {
     refresh();
-  }, [sidekick]);
+  }, [refresh]);
 
   if (!sidekick?.security) return null;
 
@@ -286,7 +286,7 @@ export default function AuditLogPanel({ sidekick }) {
   const [verification, setVerification] = useState(null);
   const [status, setStatus] = useState('');
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!sidekick) return;
     try {
       const [listed, verified] = await Promise.all([
@@ -299,11 +299,11 @@ export default function AuditLogPanel({ sidekick }) {
     } catch (_e) {
       /* non-fatal */
     }
-  }
+  }, [sidekick]);
 
   useEffect(() => {
     load();
-  }, [sidekick]);
+  }, [load]);
 
   async function handleExport() {
     if (!sidekick) return;

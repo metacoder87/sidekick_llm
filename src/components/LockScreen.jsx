@@ -25,7 +25,7 @@ export default function LockScreen({ sidekick, status, onUnlocked }) {
     return () => {
       cancelled = true;
     };
-  }, [sidekick, status?.remembered]);
+  }, [sidekick, status?.remembered, onUnlocked]);
 
   async function submit(event) {
     event.preventDefault();

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 const ICON_MAP = {
   brain: '🧠',
@@ -19,15 +19,15 @@ export default function ExpertLibraryModal({ isOpen, onClose, sidekick, onInstal
   const [progress, setProgress] = useState('');
   const [status, setStatus] = useState('');
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!sidekick) return;
     try {
       const catalog = await sidekick.specialist.catalog();
-      setTemplates(catalog.templates || []);
+      setTemplates(catalog?.templates || []);
     } catch (_e) {
       /* non-fatal */
     }
-  }
+  }, [sidekick]);
 
   useEffect(() => {
     if (isOpen) {
@@ -35,7 +35,7 @@ export default function ExpertLibraryModal({ isOpen, onClose, sidekick, onInstal
       setStatus('');
       setProgress('');
     }
-  }, [isOpen, sidekick]);
+  }, [isOpen, load]);
 
   // Seed research reports progress like any other Deep Research run.
   useEffect(() => {

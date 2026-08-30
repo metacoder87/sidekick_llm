@@ -3,6 +3,7 @@ release
 node_modules
 package-lock.json
 build/icon.png
+.gitignore
 
 # Hand-wrapped prose. Prettier reflows Markdown paragraphs, which would churn
 # ROADMAP.md's deliberate line breaks on every run.
