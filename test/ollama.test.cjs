@@ -38,6 +38,66 @@ test('listModels maps the Ollama tags response', async () => {
   global.fetch = originalFetch;
 });
 
+test('listModels accepts the newer `model` field when `name` is absent', async (t) => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      models: [{ model: 'qwen3:8b', size: 42, capabilities: ['completion'] }],
+    }),
+  });
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  const models = await new OllamaService().listModels();
+
+  assert.equal(models[0].name, 'qwen3:8b');
+  assert.deepEqual(models[0].capabilities, ['completion']);
+});
+
+test('deleteModel calls the Ollama delete endpoint', async (t) => {
+  const originalFetch = global.fetch;
+  const requests = [];
+  global.fetch = async (url, options) => {
+    requests.push({ url: String(url), options });
+    return { ok: true, text: async () => '' };
+  };
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  const service = new OllamaService();
+  const result = await service.deleteModel('llama3.2');
+
+  assert.equal(result.ok, true);
+  assert.match(requests[0].url, /\/api\/delete$/);
+  assert.equal(requests[0].options.method, 'DELETE');
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    model: 'llama3.2',
+    name: 'llama3.2',
+  });
+});
+
+test('deleteModel reports Ollama failures instead of throwing', async (t) => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: false,
+    status: 404,
+    text: async () => 'model not found',
+  });
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  const service = new OllamaService();
+  const result = await service.deleteModel('missing-model');
+
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /404/);
+  assert.match(result.reason, /model not found/);
+});
+
 test('generateChat streams NDJSON chat chunks into a final response', async () => {
   const originalFetch = global.fetch;
   global.fetch = async () => ({

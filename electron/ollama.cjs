@@ -36,12 +36,41 @@ class OllamaService {
     }
 
     const payload = await response.json();
-    return (payload.models || []).map((model) => ({
-      name: model.name,
-      size: model.size ?? null,
-      modifiedAt: model.modified_at ?? null,
-      isAvailable: true,
-    }));
+    return (payload.models || []).map((model) => {
+      const entry = {
+        // Recent Ollama releases expose both `name` and `model`; older ones
+        // only `name`. Accept either so a downloaded model is never invisible.
+        name: model.name || model.model,
+        size: model.size ?? null,
+        modifiedAt: model.modified_at ?? null,
+        isAvailable: true,
+      };
+      // Capabilities let us classify embedding models that are not in the
+      // curated catalog. Older Ollama versions omit the field entirely.
+      if (Array.isArray(model.capabilities)) entry.capabilities = model.capabilities;
+      return entry;
+    });
+  }
+
+  // Remove a model from the local Ollama store. Never throws: the settings UI
+  // reports `reason` instead of the model button appearing to do nothing.
+  async deleteModel(name) {
+    if (!name) return { ok: false, reason: 'No model selected.' };
+    try {
+      const response = await fetch(`${this.baseUrl()}/api/delete`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        // Recent Ollama uses `model`; older releases used `name`.
+        body: JSON.stringify({ model: name, name }),
+      });
+      if (!response.ok) {
+        const detail = (await response.text().catch(() => '')).slice(0, 200);
+        return { ok: false, reason: `Ollama returned ${response.status}. ${detail}`.trim() };
+      }
+      return { ok: true, name };
+    } catch (error) {
+      return { ok: false, reason: `Cannot reach Ollama: ${error.message}` };
+    }
   }
 
   async generateChat({ model, messages, signal, onChunk }) {
@@ -274,6 +303,46 @@ class OllamaService {
       return payload.embedding || null;
     } catch (_error) {
       return null;
+    }
+  }
+
+  async generateEmbeddingDetailed({ model, input }) {
+    try {
+      const response = await fetch(`${this.baseUrl()}/api/embeddings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          prompt: input,
+        }),
+      });
+
+      if (!response.ok) {
+        const detail = (await response.text().catch(() => '')).slice(0, 160);
+        return {
+          vector: null,
+          error: `Embedding model "${model}" returned HTTP ${response.status}. ${detail}`.trim(),
+        };
+      }
+
+      const payload = await response.json();
+      if (payload.error) {
+        return { vector: null, error: `Embedding model "${model}": ${payload.error}` };
+      }
+      if (!Array.isArray(payload.embedding) || payload.embedding.length === 0) {
+        return {
+          vector: null,
+          error: `Model "${model}" returned no embedding — it may not support embeddings. Pull a dedicated model like nomic-embed-text.`,
+        };
+      }
+      return { vector: payload.embedding, error: null };
+    } catch (error) {
+      return {
+        vector: null,
+        error: `Cannot reach Ollama to embed with "${model}": ${error.message}`,
+      };
     }
   }
 }
