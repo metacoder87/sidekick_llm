@@ -197,6 +197,17 @@ function GroundingBadge({ grounding }) {
     (grounding.name ? [{ name: grounding.name, matches: grounding.matches }] : []);
   const contributing = experts.filter((e) => (e.matches || 0) > 0);
 
+  // Embedding model unavailable — retrieval fell back to keyword-only or nothing.
+  // Surface the reason so the user knows exactly what to fix (download the model,
+  // switch engines, or re-index) instead of seeing a generic ungrounded warning.
+  if (grounding.groundingDisabled) {
+    return (
+      <div className="grounding-badge grounding-badge--ungrounded">
+        ⚠️ {grounding.groundingDisabled.reason}
+      </div>
+    );
+  }
+
   if (grounding.grounded) {
     return (
       <div className="grounding-badge grounding-badge--grounded">
