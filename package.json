@@ -5,16 +5,15 @@
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
-    "predev": "npm run rebuild:native",
     "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
     "build": "vite build",
     "preview": "cross-env PREVIEW=true electron .",
-    "test": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test --experimental-test-isolation=none test/ollama.test.cjs test/search_memory.test.cjs test/repository.test.cjs test/profile_specialist.test.cjs test/context_builder.test.cjs test/roundtable.test.cjs test/encryption.test.cjs test/license.test.cjs",
+    "test": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test --experimental-test-isolation=none test/ollama.test.cjs test/llm_provider.test.cjs test/search_memory.test.cjs test/repository.test.cjs test/profile_specialist.test.cjs test/context_builder.test.cjs test/roundtable.test.cjs test/encryption.test.cjs test/license.test.cjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test:node": "node --test --experimental-test-isolation=none test/ollama.test.cjs test/search_memory.test.cjs",
+    "test:node": "node --test --experimental-test-isolation=none test/ollama.test.cjs test/llm_provider.test.cjs test/search_memory.test.cjs",
     "test:electron": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test --experimental-test-isolation=none test/repository.test.cjs test/profile_specialist.test.cjs test/context_builder.test.cjs test/roundtable.test.cjs test/encryption.test.cjs test/license.test.cjs",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
     "icon": "node build/make-icon.cjs",
@@ -22,14 +21,13 @@
     "dist:win": "npm run build && electron-builder --win",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:linux": "npm run build && electron-builder --linux",
-    "rebuild:native": "electron-rebuild -f -w better-sqlite3,better-sqlite3-multiple-ciphers",
-    "postinstall": "npm run rebuild:native"
+    "postinstall": "node scripts/patch-asar-glob.cjs"
   },
   "dependencies": {
-    "better-sqlite3": "^12.8.0",
-    "better-sqlite3-multiple-ciphers": "^12.11.1",
-    "electron-updater": "^6.8.9",
-    "node-llama-cpp": "^3.20.0",
+    "better-sqlite3": "^13.1.1",
+    "better-sqlite3-multiple-ciphers": "^13.0.3",
+    "electron-updater": "^6.8.11",
+    "node-llama-cpp": "^3.22.3",
     "pdf-parse": "^2.4.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -54,7 +52,8 @@
       "!**/*.map"
     ],
     "asarUnpack": [
-      "**/*.node"
+      "**/*.node",
+      "node_modules/node-llama-cpp/**/*"
     ],
     "win": {
       "target": [
@@ -86,20 +85,37 @@
     }
   },
   "devDependencies": {
-    "@electron/rebuild": "^4.0.1",
     "@eslint/js": "^9.39.5",
-    "@vitejs/plugin-react": "^6.0.1",
-    "concurrently": "^9.1.2",
+    "@vitejs/plugin-react": "^6.3.0",
+    "concurrently": "^9.2.5",
     "cross-env": "^7.0.3",
-    "electron": "^41.1.1",
-    "electron-builder": "^26.15.3",
+    "electron": "^45.3.0",
+    "electron-builder": "^26.18.0",
     "eslint": "^9.39.5",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "globals": "^17.8.0",
-    "prettier": "^3.9.6",
-    "vite": "^8.0.5",
-    "wait-on": "^8.0.1"
+    "globals": "^17.14.0",
+    "prettier": "^3.10.0",
+    "vite": "^8.3.8",
+    "wait-on": "^9.5.1"
+  },
+  "overrides": {
+    "brace-expansion@1": "1.1.22",
+    "brace-expansion@2": "2.1.8",
+    "brace-expansion@5": "5.0.13",
+    "fast-uri@3": "3.1.9",
+    "glob@7": "14.0.5",
+    "glob@9": "14.0.5",
+    "global-agent@3": "4.1.7",
+    "lodash.isequal": "npm:fast-deep-equal@3.1.3",
+    "minimatch@9": "11.0.8",
+    "minimatch@10": "11.0.8",
+    "node-abi@4": "4.40.0",
+    "rimraf@2": "4.3.1",
+    "source-map-js@1": "1.2.2",
+    "undici@6": "6.29.1",
+    "undici@7": "7.30.2",
+    "zod@4": "4.6.7"
   }
 }

@@ -19,7 +19,7 @@ export default [
 
   // ---- Electron main process (CommonJS) ----
   {
-    files: ['electron/**/*.cjs', 'build/**/*.cjs', '*.cjs'],
+    files: ['electron/**/*.cjs', 'build/**/*.cjs', 'scripts/**/*.cjs', '*.cjs'],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'commonjs',
