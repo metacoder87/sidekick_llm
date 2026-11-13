@@ -1,5 +1,6 @@
 const path = require('node:path');
 const { app, BrowserWindow, dialog, shell } = require('electron');
+const channels = require('../shared/channels.json');
 
 let mainWindow = null;
 
@@ -73,6 +74,15 @@ function createWindow() {
 
   hardenNavigation(mainWindow.webContents);
 
+  // Keep the renderer's maximize/restore icon in sync even when the user
+  // maximizes via double-clicking the draggable title bar or a system shortcut.
+  const sendWindowState = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send(channels.events.windowMaximized, mainWindow.isMaximized());
+  };
+  mainWindow.on('maximize', sendWindowState);
+  mainWindow.on('unmaximize', sendWindowState);
+
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   const previewMode = process.env.PREVIEW === 'true';
 
@@ -92,8 +102,13 @@ function createWindow() {
   });
 
   if (devServerUrl) {
-    mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
-      console.log(`[renderer:${level}] ${message} (${sourceId}:${line})`);
+    mainWindow.webContents.on('console-message', (event) => {
+      // In newer versions of Electron, the arguments are passed as properties on the event object.
+      // See: https://www.electronjs.org/docs/latest/api/web-contents#event-console-message
+      const { level, message, line, sourceId } = event;
+      if (level >= 2) {
+        console.log(`[renderer:${level}] ${message} (${sourceId}:${line})`);
+      }
     });
   }
 
@@ -138,11 +153,41 @@ function initAutoUpdate() {
 async function bootstrap() {
   try {
     const { registerIpcHandlers } = require('./ipc.cjs');
-    registerIpcHandlers({
+    const ipc = registerIpcHandlers({
       userDataPath: app.getPath('userData'),
     });
     createWindow();
     initAutoUpdate();
+
+    // Tell the isolated inference worker to release GGUF/KV memory on the way
+    // out. SQLite stays in the main process even if native inference crashes.
+    //
+    // `will-quit` fires again when the deferred app.quit() below starts a new
+    // quit sequence. Intercept only the first pass: preventing every pass makes
+    // the app re-quit itself forever, leaving the process (and the dev terminal)
+    // alive after the last window is gone.
+    let disposingForQuit = false;
+    app.on('will-quit', (event) => {
+      if (disposingForQuit) return;
+      disposingForQuit = true;
+      try {
+        const result = ipc.dispose?.();
+        if (result && typeof result.then === 'function') {
+          event.preventDefault();
+          // Native teardown must never hold the process hostage: if the worker
+          // is busy or wedged, quit after a short grace period anyway.
+          const timeout = new Promise((resolve) => {
+            const timer = setTimeout(resolve, 5000);
+            timer.unref?.();
+          });
+          Promise.race([result, timeout])
+            .catch((error) => console.error('Engine dispose failed:', error.message))
+            .finally(() => app.quit());
+        }
+      } catch (error) {
+        console.error('Engine dispose failed:', error.message);
+      }
+    });
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

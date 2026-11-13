@@ -5,7 +5,11 @@
     "setActive": "models:setActive",
     "catalog": "models:catalog",
     "pull": "models:pull",
-    "hardware": "models:hardware"
+    "listLocal": "models:listLocal",
+    "listAll": "models:listAll",
+    "download": "models:download",
+    "hardware": "models:hardware",
+    "delete": "models:delete"
   },
   "ollama": {
     "status": "ollama:getStatus"
@@ -43,6 +47,12 @@
     "get": "settings:get",
     "set": "settings:set"
   },
+  "window": {
+    "minimize": "window:minimize",
+    "toggleMaximize": "window:toggleMaximize",
+    "isMaximized": "window:isMaximized",
+    "close": "window:close"
+  },
   "license": {
     "status": "license:status",
     "activate": "license:activate",
@@ -66,6 +76,7 @@
     "update": "specialist:update",
     "delete": "specialist:delete",
     "reindex": "specialist:reindex",
+    "reindexAll": "specialist:reindexAll",
     "exportPack": "specialist:exportPack",
     "importPack": "specialist:importPack",
     "catalog": "specialist:catalog",
@@ -91,6 +102,7 @@
     "turnComplete": "events:roundtable-turn-complete",
     "researchProgress": "events:research-progress",
     "locked": "events:security-locked",
-    "modelPull": "events:model-pull"
+    "modelPull": "events:model-pull",
+    "windowMaximized": "events:window-maximized"
   }
 }

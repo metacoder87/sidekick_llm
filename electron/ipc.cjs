@@ -1,20 +1,18 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 const fsSync = require('node:fs');
 const { BrowserWindow, dialog, ipcMain, powerMonitor, safeStorage } = require('electron');
 
 const channels = require('../shared/channels.json');
 const expertCatalog = require('../shared/expertCatalog.json');
-const modelCatalog = require('../shared/modelCatalog.json');
 const {
   ConversationRepository,
   isDatabaseEncrypted,
   canOpenWithPassphrase,
   rekeyDatabase,
 } = require('./repository.cjs');
-const { OllamaService } = require('./ollama.cjs');
+const { createLLMProvider, hardwareProfile } = require('./llmProvider.cjs');
 const { MemoryManager } = require('./memory/memoryManager.cjs');
 const { DeepResearchWorker } = require('./research/deepResearch.cjs');
 const { buildChatContext } = require('./contextBuilder.cjs');
@@ -41,9 +39,13 @@ function registerIpcHandlers({ userDataPath }) {
   let researchWorker = null;
   let licenseService = null;
 
-  const ollama = new OllamaService({
-    getBaseUrl: () =>
-      (repository && repository.getSetting('ollamaBaseUrl')) || 'http://localhost:11434',
+  // One engine facade for the whole app: routes every call to the engine the
+  // user selected in Settings — the built-in node-llama-cpp runtime (default,
+  // no external server, no open port) or an existing Ollama install. Switching
+  // works at runtime; the settings accessor is read on every call.
+  const ollama = createLLMProvider({
+    getSettings: () => (repository ? repository.getAllSettings() : {}),
+    userDataPath,
   });
 
   const activeGenerations = new Map();
@@ -345,97 +347,184 @@ function registerIpcHandlers({ userDataPath }) {
   });
 
   // ---- Model catalog & downloads --------------------------------------------------
-  // Recommendations are based on total system RAM. GPU VRAM would be a better
-  // signal but cannot be read reliably cross-platform (Windows WMI AdapterRAM
-  // under-reports modern cards — an RTX 5080 reports 4 GB), so we name the GPU and
-  // size on RAM rather than assert a VRAM figure we do not trust.
-  function hardwareProfile() {
-    const totalRamGB = os.totalmem() / 1024 ** 3;
-    return {
-      totalRamGB: Number(totalRamGB.toFixed(1)),
-      freeRamGB: Number((os.freemem() / 1024 ** 3).toFixed(1)),
-      cpuCount: os.cpus().length,
-      cpuModel: os.cpus()[0]?.model?.trim() || 'unknown',
-      platform: process.platform,
-    };
-  }
-
-  // These run while LOCKED too: a first-run user has no corpus yet, and someone with
-  // an encrypted corpus may still need to fix a missing model before unlocking.
+  // The catalog, gallery and download flow are engine-specific (built-in GGUF
+  // gallery vs. Ollama's pull), so they live on the provider and are routed by
+  // the facade. These run while LOCKED too: a first-run user has no corpus yet,
+  // and someone with an encrypted corpus may still need to fix a missing model
+  // before unlocking.
   ipcMain.handle(channels.models.hardware, async () => hardwareProfile());
 
-  ipcMain.handle(channels.models.catalog, async () => {
-    const hardware = hardwareProfile();
-    const installed = await ollama.listModels().catch(() => []);
-    const installedNames = new Set(installed.map((m) => m.name));
+  ipcMain.handle(channels.models.catalog, async () => ollama.getCatalog());
 
-    return {
-      hardware,
-      installed: installed.map((m) => m.name),
-      models: modelCatalog.models.map((model) => ({
-        ...model,
-        // Match "llama3.1:8b" against an installed "llama3.1:8b" or "llama3.1:8b-...".
-        installed: [...installedNames].some(
-          (n) => n === model.name || n.startsWith(`${model.name}-`),
-        ),
-        fits: hardware.totalRamGB >= model.minRamGB,
-        tight: hardware.totalRamGB >= model.minRamGB && hardware.totalRamGB < model.minRamGB * 1.5,
-      })),
-    };
+  // Alias of pull for the gallery UI: download a curated model (built-in engine)
+  // or pull it (Ollama). Same progress events, same cancellation path.
+  ipcMain.handle(channels.models.download, async (event, { name } = {}) => {
+    return ipcPullModel(event, { name });
   });
 
-  ipcMain.handle(channels.models.pull, async (event, { name } = {}) => {
-    if (!name) return { ok: false, reason: 'No model selected.' };
+  function ipcPullModel(event, { name } = {}) {
+    if (!name) return Promise.resolve({ ok: false, reason: 'No model selected.' });
 
     const controller = new AbortController();
     activeGenerations.set(`pull:${name}`, controller);
-    try {
-      const result = await ollama.pullModel({
+    return ollama
+      .pullModel({
         name,
         signal: controller.signal,
         onProgress: (progress) => {
           event.sender.send(channels.events.modelPull, { name, ...progress });
         },
+      })
+      .then((result) => {
+        // Only audit once the corpus is open — a first-run pull happens before it is.
+        if (repository && result.ok) {
+          repository.appendAudit({ action: 'model.pull', detail: name });
+          // Calibrate only after an explicit model download. This is local and
+          // bounded by the worker; its result is advisory, not a prerequisite
+          // for using the CPU fallback.
+          const catalogEntry = require('../shared/ggufCatalog.json').models.find(
+            (m) => m.id === name,
+          );
+          if (catalogEntry?.role === 'chat' && repository.getSetting('llmProvider') !== 'ollama') {
+            const embeddingModel = repository.getSetting('embeddingModel');
+            ollama
+              .benchmark({ model: name, embeddingModel })
+              .then((calibration) =>
+                repository.setSetting(
+                  'nativeCalibration',
+                  JSON.stringify({ model: name, ...calibration }),
+                ),
+              )
+              .catch((error) =>
+                repository.setSetting(
+                  'nativeCalibration',
+                  JSON.stringify({ model: name, error: error.message }),
+                ),
+              );
+          }
+        }
+        return result;
+      })
+      .finally(() => {
+        activeGenerations.delete(`pull:${name}`);
       });
-      // Only audit once the corpus is open — a first-run pull happens before it is.
-      if (repository && result.ok) {
-        repository.appendAudit({ action: 'model.pull', detail: name });
-      }
-      return result;
-    } finally {
-      activeGenerations.delete(`pull:${name}`);
-    }
-  });
+  }
 
-  handleSecure(channels.models.list, async () => {
-    return ollama.listModels();
-  });
+  ipcMain.handle(channels.models.pull, async (event, { name } = {}) =>
+    ipcPullModel(event, { name }),
+  );
 
-  handleSecure(channels.models.getActive, async () => {
+  // Local models of the ACTIVE engine (what ModelSelect lists).
+  // Not handleSecure: listing available models must work even when the corpus
+  // is locked, so the user can see and switch engines without unlocking first.
+  ipcMain.handle(channels.models.listLocal, async () => ollama.listModels());
+  ipcMain.handle(channels.models.list, async () => ollama.listModels());
+  // Both engines, tagged with `engine`. The UI needs this because a model may
+  // already be downloaded in Ollama while the built-in engine is active — it
+  // must still be visible and selectable instead of looking "not installed".
+  ipcMain.handle(channels.models.listAll, async () => ollama.listAllModels());
+
+  // Get the active model — does NOT require the repository to be open, so the
+  // app can show the active model even when the corpus is locked. Falls back to
+  // the first locally available model when no saved model exists.
+  ipcMain.handle(channels.models.getActive, async () => {
+    if (!repository) return '';
     const savedModel = repository.getSetting('activeModel');
-    if (savedModel) {
-      return savedModel;
+    const currentEngine = repository.getSetting('llmProvider') === 'ollama' ? 'ollama' : 'builtin';
+    const allModels = await ollama.listAllModels().catch(() => []);
+    const currentModels = allModels.filter((model) => model.engine === currentEngine);
+
+    // Prefer the saved model, but never return an embedding model as the chat
+    // model. A first-run install often places the small embedder on disk first.
+    const savedEntry = currentModels.find(
+      (model) => model.name === savedModel && model.role !== 'embedding',
+    );
+    if (savedEntry) return savedModel;
+
+    let nextEngine = currentEngine;
+    let nextModel = currentModels.find((model) => model.role !== 'embedding')?.name || '';
+
+    // A saved model from the other engine (or a deleted download) must never be
+    // returned. If the active engine has no chat model but the other one does,
+    // fall back to it instead of leaving the app unable to answer.
+    if (!nextModel) {
+      const otherEngine = currentEngine === 'ollama' ? 'builtin' : 'ollama';
+      const otherModel = allModels.find(
+        (model) => model.engine === otherEngine && model.role !== 'embedding',
+      );
+      if (otherModel) {
+        nextEngine = otherEngine;
+        nextModel = otherModel.name;
+      }
     }
 
-    const models = await ollama.listModels();
-    const firstModel = models[0]?.name || '';
-    if (firstModel) {
-      repository.setSetting('activeModel', firstModel);
-    }
-    return firstModel;
+    if (!nextModel) return '';
+    if (nextEngine !== currentEngine) repository.setSetting('llmProvider', nextEngine);
+    if (nextModel !== savedModel) repository.setSetting('activeModel', nextModel);
+    return nextModel;
   });
 
-  handleSecure(channels.models.setActive, async (_event, modelName) => {
-    repository.setSetting('activeModel', modelName);
-    return modelName;
+  // Accept a bare name for backwards compatibility, or { name, engine } from
+  // the grouped model picker. Choosing an Ollama model also switches engines so
+  // the selection and the active provider can never disagree.
+  handleSecure(channels.models.setActive, async (_event, payload) => {
+    const selection = typeof payload === 'string' ? { name: payload } : payload || {};
+    const name = selection.name || '';
+    const engine =
+      selection.engine === 'builtin' || selection.engine === 'ollama' ? selection.engine : null;
+    if (engine) repository.setSetting('llmProvider', engine);
+    if (name) repository.setSetting('activeModel', name);
+    return {
+      name: name || repository.getSetting('activeModel') || '',
+      engine: engine || repository.getSetting('llmProvider') || 'builtin',
+    };
   });
 
-  handleSecure(channels.ollama.status, async () => {
+  ipcMain.handle(channels.models.delete, async (_event, { name }) => {
+    return ollama.deleteModel(name);
+  });
+
+  // Ollama server status — does NOT require the repository. Checking whether the
+  // Ollama server is reachable is independent of corpus lock state, so this must
+  // work even when the database is locked. Otherwise refreshOllamaStatus in the
+  // renderer throws (no .catch on getStatus), Promise.all rejects, and the app
+  // is dead: no models, no active model, no onboarding, composer disabled.
+  ipcMain.handle(channels.ollama.status, async () => {
     return ollama.getStatus();
   });
 
+  // Window controls for the custom title bar. These must work regardless of
+  // corpus lock state — a locked app still needs to be minimizable and closable.
+  // Resolve the window from the sender so DevTools or any secondary contents
+  // can never act on the wrong BrowserWindow.
+  ipcMain.handle(channels.window.minimize, (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.minimize();
+  });
+
+  ipcMain.handle(channels.window.toggleMaximize, (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) return false;
+    if (window.isMaximized()) {
+      window.unmaximize();
+    } else {
+      window.maximize();
+    }
+    return window.isMaximized();
+  });
+
+  ipcMain.handle(channels.window.isMaximized, (event) => {
+    return Boolean(BrowserWindow.fromWebContents(event.sender)?.isMaximized());
+  });
+
+  ipcMain.handle(channels.window.close, (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.close();
+  });
+
   // Settings Handlers
-  handleSecure(channels.settings.get, async () => {
+  // Settings get must work while locked — the user needs to read their current
+  // engine/model settings (and potentially switch engines) without unlocking the
+  // corpus first. Settings set remains handleSecure for write protection.
+  ipcMain.handle(channels.settings.get, async () => {
     return repository.getAllSettings();
   });
 
@@ -681,6 +770,54 @@ function registerIpcHandlers({ userDataPath }) {
     });
   });
 
+  // Re-index every Expert hub when the embedding model changes — repairs all
+  // vaults whose vectors were embedded with a different (or no) model.
+  handleSecure(channels.specialist.reindexAll, async (event) => {
+    const embeddingModel = repository.getSetting('embeddingModel');
+    const preflight = await ollama.checkEmbedding(embeddingModel);
+    if (!preflight.ok) {
+      return { success: false, reason: preflight.reason };
+    }
+
+    const hubs = repository.listSpecialistHubs() || [];
+    let totalReindexed = 0;
+    let totalFailed = 0;
+    const failures = [];
+
+    for (const hub of hubs) {
+      try {
+        const result = await researchWorker.reindexHub({
+          hubId: hub.id,
+          embeddingModel,
+          onProgress: (progress) => {
+            event.sender.send(channels.events.researchProgress, {
+              hubId: hub.id,
+              hubName: hub.name,
+              ...progress,
+            });
+          },
+        });
+        if (result.success) {
+          totalReindexed += result.reindexed || 0;
+        } else {
+          totalFailed += 1;
+          failures.push({ hubId: hub.id, hubName: hub.name, reason: result.reason || 'unknown' });
+        }
+      } catch (error) {
+        totalFailed += 1;
+        failures.push({ hubId: hub.id, hubName: hub.name, reason: error.message });
+      }
+    }
+
+    return {
+      success: totalFailed === 0,
+      totalReindexed,
+      totalFailed,
+      failures,
+      hubs: hubs.length,
+    };
+  });
+
   // Deep Research & Document Ingestion Handlers
   handleSecure(channels.research.start, async (event, { hubId, topic, seedUrls }) => {
     let model = repository.getSetting('activeModel');
@@ -924,6 +1061,28 @@ function registerIpcHandlers({ userDataPath }) {
     // background model, falling back to the chat model when none is configured.
     const backgroundModel = repository.getSetting('backgroundModel') || model;
 
+    // Pre-flight the embedding model so a missing/misconfigured embedder is
+    // surfaced as an actionable "grounding disabled" state instead of silently
+    // returning zero retrieved chunks. This mirrors the preflight already used by
+    // ingest/research/notes. The chat path still proceeds so keyword-only
+    // retrieval can degrade gracefully.
+    let groundingDisabled = null;
+    try {
+      const embeddingPreflight = await ollama.checkEmbedding(embeddingModel);
+      if (!embeddingPreflight.ok) {
+        groundingDisabled = {
+          reason: `Embedding model "${embeddingModel}" is not available: ${embeddingPreflight.reason}. Vault search is keyword-only until the model is downloaded or the engine is switched.`,
+        };
+      }
+    } catch (_error) {
+      groundingDisabled = {
+        reason: `Embedding model "${embeddingModel}" could not be pre-flighted. Vault search is keyword-only.`,
+      };
+    }
+    // Pass the result into the context builder so it can surface it in the
+    // specialist grounding payload without duplicating the check.
+    payload.groundingDisabled = groundingDisabled;
+
     // Check Settings
     const allSettings = repository.getAllSettings();
     const isWebSearchEnabled = payload.webSearchOverride ?? allSettings.webSearchEnabled === 'true';
@@ -1056,7 +1215,11 @@ function registerIpcHandlers({ userDataPath }) {
                 model,
                 embeddingModel,
               }),
-            ]).catch(() => {});
+            ]).catch((error) => {
+              // Background tasks must never block the chat response, but their
+              // failures should be logged so they can be diagnosed.
+              console.error('Background memory tasks failed:', error.message);
+            });
           })
           .catch((error) => {
             event.sender.send(channels.events.streamError, {
@@ -1337,6 +1500,8 @@ function registerIpcHandlers({ userDataPath }) {
     repository,
     memoryManager,
     licenseService,
+    // Release native inference memory on quit.
+    dispose: () => ollama.disposeAll(),
   };
 }
 

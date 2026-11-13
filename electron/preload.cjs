@@ -12,10 +12,16 @@ contextBridge.exposeInMainWorld('sidekick', {
   models: {
     list: () => ipcRenderer.invoke(channels.models.list),
     getActive: () => ipcRenderer.invoke(channels.models.getActive),
-    setActive: (modelName) => ipcRenderer.invoke(channels.models.setActive, modelName),
+    // Accepts either a bare model name (legacy) or { name, engine } so choosing
+    // an Ollama model can switch engines in the same step.
+    setActive: (payload) => ipcRenderer.invoke(channels.models.setActive, payload),
     catalog: () => ipcRenderer.invoke(channels.models.catalog),
+    listLocal: () => ipcRenderer.invoke(channels.models.listLocal),
+    listAll: () => ipcRenderer.invoke(channels.models.listAll),
     pull: (payload) => ipcRenderer.invoke(channels.models.pull, payload),
+    download: (payload) => ipcRenderer.invoke(channels.models.download, payload),
     hardware: () => ipcRenderer.invoke(channels.models.hardware),
+    delete: (payload) => ipcRenderer.invoke(channels.models.delete, payload),
   },
   ollama: {
     getStatus: () => ipcRenderer.invoke(channels.ollama.status),
@@ -56,6 +62,16 @@ contextBridge.exposeInMainWorld('sidekick', {
     get: () => ipcRenderer.invoke(channels.settings.get),
     set: (key, value) => ipcRenderer.invoke(channels.settings.set, { key, value }),
   },
+  // Custom title-bar controls. The window is created with titleBarStyle:
+  // 'hidden', so without these the app has no way to minimize, maximize, or
+  // close from the UI.
+  window: {
+    minimize: () => ipcRenderer.invoke(channels.window.minimize),
+    toggleMaximize: () => ipcRenderer.invoke(channels.window.toggleMaximize),
+    isMaximized: () => ipcRenderer.invoke(channels.window.isMaximized),
+    close: () => ipcRenderer.invoke(channels.window.close),
+    onMaximizedChange: (listener) => subscribe(channels.events.windowMaximized, listener),
+  },
   license: {
     status: () => ipcRenderer.invoke(channels.license.status),
     activate: (licenseKey) => ipcRenderer.invoke(channels.license.activate, licenseKey),
@@ -79,6 +95,7 @@ contextBridge.exposeInMainWorld('sidekick', {
     update: (hubData) => ipcRenderer.invoke(channels.specialist.update, hubData),
     delete: (id) => ipcRenderer.invoke(channels.specialist.delete, id),
     reindex: (hubId) => ipcRenderer.invoke(channels.specialist.reindex, { hubId }),
+    reindexAll: () => ipcRenderer.invoke(channels.specialist.reindexAll),
     exportPack: (hubId) => ipcRenderer.invoke(channels.specialist.exportPack, hubId),
     importPack: () => ipcRenderer.invoke(channels.specialist.importPack),
     catalog: () => ipcRenderer.invoke(channels.specialist.catalog),
