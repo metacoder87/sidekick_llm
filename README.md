@@ -16,8 +16,9 @@ embeddings, notes, and documents never leave your machine.
 
 ## Key features
 
-- **Local inference via Ollama** — chat with any local model; switch freely at any
-  time. Streaming responses over an NDJSON pipe.
+- **Built-in local inference** — `node-llama-cpp` runs GGUF models in an isolated
+  Sidekick worker, with no server, no listening network port, and no Ollama install.
+  Ollama remains an optional Advanced compatibility provider.
 - **AI Experts (Specialist Knowledge Hubs)** — create a domain expert, then train
   its private vector vault by:
   - **uploading PDFs / text / markdown**, or
@@ -46,11 +47,11 @@ embeddings, notes, and documents never leave your machine.
 
 ## Stack
 
-- **Desktop**: Electron 41 (context isolation on, sandboxed preload IPC bridge)
+- **Desktop**: Electron 45 (context isolation on, preload IPC bridge)
 - **Frontend**: React 18 + Vite 8
 - **Persistence**: SQLite via `better-sqlite3` (WAL, FTS5, cosine vector search)
 - **Documents / web**: `pdf-parse` (v2) for PDFs, a native-fetch scraper for pages
-- **LLM**: Ollama HTTP API — `/api/chat` (streaming) and `/api/embeddings`
+- **LLM**: `node-llama-cpp` / embedded `llama.cpp` in a private Electron utility process
 
 ## System requirements
 
@@ -58,8 +59,9 @@ embeddings, notes, and documents never leave your machine.
 numbers are published up front on purpose — a local-LLM app that hides its hardware
 cost earns refunds.
 
-**[Ollama](https://ollama.com) is a required prerequisite.** Sidekick does not bundle
-an inference engine; it talks to Ollama at `http://localhost:11434`.
+**No external inference software is required.** Sidekick downloads a GGUF model only
+after you explicitly choose it in onboarding. Native inference communicates over a
+private operating-system process channel and opens no listening port.
 
 | | Minimum | Comfortable | For the larger models |
 |---|---|---|---|
@@ -68,7 +70,8 @@ an inference engine; it talks to Ollama at `http://localhost:11434`.
 | **OS** | Windows 10+, macOS 12+, or Linux | | |
 
 Disk figures are models plus the app; your corpus grows on top of that. A GPU is not
-required — Ollama will use one if present, and everything is far faster with it.
+required. After a user-approved model install, Sidekick runs a short local calibration
+and retains the fastest stable native backend; CPU remains the fallback.
 
 **Recommendations are based on total system RAM, not GPU VRAM**, because VRAM cannot
 be read reliably across platforms (Windows WMI under-reports modern cards — an RTX
@@ -76,26 +79,17 @@ be read reliably across platforms (Windows WMI under-reports modern cards — an
 
 ### Models
 
-The app's first-run screen detects your RAM, shows what fits, and installs your
-choices with one click. To do it by hand:
-
-```bash
-ollama pull nomic-embed-text   # 0.3 GB — REQUIRED for Experts and memory search
-ollama pull llama3.1:8b        # 4.7 GB — recommended starting chat model
-```
+The first-run screen offers a verified chat-model choice and always pairs it with the
+required embedding model. Downloads are explicit, resumable, and fingerprinted.
 
 | Model | Download | RAM floor | Role |
 |---|---|---|---|
-| `nomic-embed-text` | 0.3 GB | 4 GB | **Required.** All retrieval depends on it |
-| `llama3.2:3b` | 2.0 GB | 8 GB | Fast background work (summaries, extraction) |
-| `llama3.1:8b` | 4.7 GB | 16 GB | Recommended general chat |
-| `mistral:7b` | 4.4 GB | 16 GB | Alternative voice for Round Tables |
-| `gemma2:9b` | 5.4 GB | 16 GB | Strong prose and editing |
-| `qwen2.5:14b` | 9.0 GB | 32 GB | Better reasoning for analysis |
-| `qwen2.5:32b` | 20 GB | 48 GB | Best local quality, real speed cost |
+| `nomic-embed-text-v1.5` Q8 | 0.15 GB | 4 GB | **Required.** All retrieval depends on it |
+| `Qwen3-8B` Q4_K_M | 5.03 GB | 16 GB | Recommended general chat |
+| `Qwen2.5-7B` Q4_K_M | 4.72 GB | 16 GB | Balanced alternative |
 
-Any Ollama model works — this list is a starting point, not a restriction. **Your
-choice of model is always yours** (ROADMAP invariant #5).
+You can import other GGUF models or enable Ollama in Advanced settings. **Your choice
+of model is always yours** (ROADMAP invariant #5).
 
 ## Getting started
 

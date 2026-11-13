@@ -8,9 +8,12 @@ and [sidekick_plan.md](sidekick_plan.md) is the original design sketch (historic
 
 ## 1. System overview
 
-Sidekick is an offline-first Electron desktop app. Two local services back it — the
-**Ollama** HTTP server (inference + embeddings) and a **SQLite** database (the
-corpus). Nothing leaves the machine except optional, user-initiated web search.
+Sidekick is an offline-first Electron desktop app. Inference and embeddings run
+through a pluggable LLM provider: by default the **built-in `node-llama-cpp`
+engine** loads GGUF models in-process (no external server, no open port), and an
+**Ollama** HTTP server remains available as an optional alternative. A **SQLite**
+database holds the corpus. Nothing leaves the machine except optional,
+user-initiated web search and model downloads from HuggingFace.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -24,8 +27,8 @@ corpus). Nothing leaves the machine except optional, user-initiated web search.
 │ MAIN PROCESS (Node in Electron)                                      │
 │  ipc.cjs — handler registry & the message pipeline                   │
 │  ┌──────────────┬───────────────┬────────────────┬────────────────┐  │
-│  │ Ollama client│ MemoryManager │ DeepResearch   │ Search + Scrape│  │
-│  │ (chat/embed) │ (facts/summary│  Worker        │ (multi-provider│  │
+│  │ LLM provider │ MemoryManager │ DeepResearch   │ Search + Scrape│  │
+│  │ (builtin/Ollama│ (facts/summary│  Worker        │ (multi-provider│  │
 │  │              │  /RAG recall) │ (ingest/research│  + fallback)   │  │
 │  ├──────────────┴───────────────┴────────────────┴────────────────┤  │
 │  │ ConversationRepository — SQLite: schema, migrations, backup,   │  │
@@ -34,10 +37,10 @@ corpus). Nothing leaves the machine except optional, user-initiated web search.
 └───────────────────────────┬──────────────────────────────────────────┘
                  ┌──────────┴───────────┐
                  ▼                      ▼
-        ┌─────────────────┐    ┌────────────────────┐
-        │ Ollama (local)  │    │ SQLite (sidekick.db│
-        │ 11434           │    │  + WAL + backups)  │
-        └─────────────────┘    └────────────────────┘
+        ┌───────────────────────────┐    ┌────────────────────┐
+        │ node-llama-cpp (in-proc)  │    │ SQLite (sidekick.db│
+        │ or Ollama (optional)      │    │  + WAL + backups)  │
+        └───────────────────────────┘    └────────────────────┘
 ```
 
 ### Process & security model
@@ -87,7 +90,7 @@ Three distinct model roles, so no single choice is overloaded (ROADMAP invariant
 | Role | Setting | Used for | Default |
 |---|---|---|---|
 | **Chat / reasoning** | `activeModel` | user-facing answers | user's free choice |
-| **Embedding** | `embeddingModel` | all vectors (vaults, memory) | `nomic-embed-text` (768-d) |
+| **Embedding** | `embeddingModel` | all vectors (vaults, memory) | `nomic-embed-text-v1.5` (768-d) |
 | **Background / utility** | `backgroundModel` | summaries, fact extraction, research query generation | empty → falls back to chat model |
 
 Embeddings are **always** produced by the dedicated embedding model, decoupled from
@@ -208,5 +211,5 @@ The suite runs under both plain Node and the Electron native runtime (for
 migrations + backup + export/import round-trips, the embedding contract
 (dimension-mismatch exclusion, write-boundary rejection), PDF extraction against a
 generated fixture, memory dedup + ranking, search fallback and query-derivation
-paths, and Ollama NDJSON parsing. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to
+paths, GGUF downloads, and Ollama NDJSON parsing. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to
 run and extend it.
