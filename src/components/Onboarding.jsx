@@ -8,15 +8,20 @@ import { DisclaimerSummary } from './LegalNotice';
 export default function Onboarding({ sidekick, onDone }) {
   const [catalog, setCatalog] = useState(null);
   const [ollamaUp, setOllamaUp] = useState(null);
+  const [engine, setEngine] = useState(null); // 'builtin' | 'ollama'
   const [pulling, setPulling] = useState(null);
   const [progress, setProgress] = useState(null);
   const [error, setError] = useState('');
+  const [selectedChat, setSelectedChat] = useState('Qwen3-8B-Q4_K_M');
 
   const refresh = useCallback(async () => {
     if (!sidekick) return;
     const status = await sidekick.ollama.getStatus().catch(() => ({ available: false }));
     setOllamaUp(status.available);
-    if (status.available) {
+    // The built-in engine needs no external server, so its gallery is always
+    // shown; for Ollama we only show it once the server answers.
+    setEngine(status.baseUrl === null ? 'builtin' : 'ollama');
+    if (status.available || status.baseUrl === null) {
       setCatalog(await sidekick.models.catalog().catch(() => null));
     }
   }, [sidekick]);
@@ -31,11 +36,12 @@ export default function Onboarding({ sidekick, onDone }) {
   }, [sidekick]);
 
   async function pull(model) {
-    setPulling(model.name);
+    const key = model.id || model.name; // gallery entries use id, Ollama models use name
+    setPulling(key);
     setError('');
     setProgress(null);
     try {
-      const result = await sidekick.models.pull({ name: model.name });
+      const result = await sidekick.models.pull({ name: key });
       if (!result.ok) setError(result.reason || 'Download failed.');
       await refresh();
     } catch (err) {
@@ -43,6 +49,34 @@ export default function Onboarding({ sidekick, onDone }) {
     } finally {
       setPulling(null);
       setProgress(null);
+    }
+  }
+
+  async function deleteModel(model) {
+    const key = model.id || model.name;
+    try {
+      const result = await sidekick.models.delete({ name: key });
+      if (!result.ok) setError(result.reason || 'Delete failed.');
+      await refresh();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function installStarterPair() {
+    const chat = models.find((model) => (model.id || model.name) === selectedChat);
+    const embedder = models.find((model) => model.role === 'embedding');
+    if (!chat || !embedder) return;
+    setError('');
+    try {
+      if (!embedder.installed) await pull(embedder);
+      if (!chat.installed) await pull(chat);
+      await sidekick.settings.set('embeddingModel', embedder.id || embedder.name);
+      await sidekick.settings.set('activeModel', chat.id || chat.name);
+      await sidekick.settings.set('backgroundModel', '');
+      await refresh();
+    } catch (err) {
+      setError(err.message);
     }
   }
 
@@ -64,17 +98,17 @@ export default function Onboarding({ sidekick, onDone }) {
           upload or research leaves this computer.
         </p>
 
-        {/* Step 1 — Ollama */}
-        <div className={`onboarding__step ${ollamaUp ? 'is-done' : 'is-active'}`}>
+        {/* Step 1 — engine */}
+        <div className={`onboarding__step ${ollamaUp !== false ? 'is-done' : 'is-active'}`}>
           <div className="onboarding__step-head">
-            <span>{ollamaUp ? '✅' : '①'}</span>
-            <strong>Ollama running</strong>
+            <span>{ollamaUp !== false ? '✅' : '①'}</span>
+            <strong>{engine === 'builtin' ? 'Model engine ready' : 'Ollama running'}</strong>
           </div>
-          {ollamaUp === false ? (
+          {ollamaUp === false && engine !== 'builtin' ? (
             <div className="onboarding__body">
               <p>
                 Sidekick uses <strong>Ollama</strong> to run models locally. It does not appear to
-                be running.
+                be running. (You can switch to the built-in engine in Settings → Model & Engine.)
               </p>
               <ol>
                 <li>
@@ -87,15 +121,19 @@ export default function Onboarding({ sidekick, onDone }) {
                 Re-check
               </button>
             </div>
-          ) : ollamaUp ? (
-            <p className="onboarding__ok">Connected.</p>
+          ) : ollamaUp !== false ? (
+            <p className="onboarding__ok">
+              {engine === 'builtin'
+                ? 'Built-in engine — models run inside the app, no server or open port needed.'
+                : 'Connected.'}
+            </p>
           ) : (
             <p className="onboarding__ok">Checking…</p>
           )}
         </div>
 
         {/* Step 2 — models */}
-        {ollamaUp ? (
+        {ollamaUp !== false || engine === 'builtin' ? (
           <div className={`onboarding__step ${ready ? 'is-done' : 'is-active'}`}>
             <div className="onboarding__step-head">
               <span>{ready ? '✅' : '②'}</span>
@@ -116,17 +154,61 @@ export default function Onboarding({ sidekick, onDone }) {
               </div>
             ) : null}
 
+            {engine === 'builtin' ? (
+              <div className="onboarding__required">
+                <strong>Recommended starter profile</strong>
+                <p>
+                  Choose a chat model; Sidekick also installs Nomic Embed Text v1.5 for private
+                  search. Downloads begin only after you press Install.
+                </p>
+                <label className="form-field">
+                  <span>Chat model</span>
+                  <select
+                    value={selectedChat}
+                    onChange={(event) => setSelectedChat(event.target.value)}
+                  >
+                    {models
+                      .filter(
+                        (model) =>
+                          model.role === 'chat' &&
+                          (model.recommended || model.id === 'Qwen2.5-7B-Instruct-Q4_K_M'),
+                      )
+                      .map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.label} — {model.sizeGB} GB
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={Boolean(pulling)}
+                  onClick={installStarterPair}
+                >
+                  Install selected model + embeddings
+                </button>
+                <p className="onboarding__footnote">
+                  Sources: <a href="https://huggingface.co/Qwen/Qwen3-8B-GGUF">Qwen3 GGUF</a> and{' '}
+                  <a href="https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF">
+                    Nomic Embed GGUF
+                  </a>
+                  .
+                </p>
+              </div>
+            ) : null}
+
             {error ? <div className="lock-error">{error}</div> : null}
 
             <div className="onboarding__models">
               {models.map((model) => (
                 <div
-                  key={model.name}
+                  key={model.id || model.name}
                   className={`onboarding__model ${model.installed ? 'is-installed' : ''} ${!model.fits ? 'is-tight' : ''}`}
                 >
                   <div className="onboarding__model-main">
                     <div className="onboarding__model-title">
-                      <strong>{model.name}</strong>
+                      <strong>{model.id || model.name}</strong>
                       <span className="library-card__cat">{model.label}</span>
                       {model.recommended && !model.installed ? (
                         <span className="active-pill">RECOMMENDED</span>
@@ -143,20 +225,31 @@ export default function Onboarding({ sidekick, onDone }) {
                   </div>
                   <div className="onboarding__model-side">
                     <span className="onboarding__size">{model.sizeGB} GB</span>
-                    {model.installed ? null : (
-                      <button
-                        type="button"
-                        className={
-                          model.required || model.recommended
-                            ? 'primary-button'
-                            : 'secondary-button'
-                        }
-                        disabled={Boolean(pulling)}
-                        onClick={() => pull(model)}
-                      >
-                        {pulling === model.name ? 'Downloading…' : 'Download'}
-                      </button>
-                    )}
+                    <div className="onboarding__model-actions">
+                      {!model.installed ? (
+                        <button
+                          type="button"
+                          className={
+                            model.required || model.recommended
+                              ? 'primary-button'
+                              : 'secondary-button'
+                          }
+                          disabled={Boolean(pulling)}
+                          onClick={() => pull(model)}
+                        >
+                          {pulling === (model.id || model.name) ? 'Downloading…' : 'Download'}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={Boolean(pulling)}
+                          onClick={() => deleteModel(model)}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -188,8 +281,9 @@ export default function Onboarding({ sidekick, onDone }) {
         </div>
 
         <p className="onboarding__footnote">
-          You can pull any other Ollama model yourself — this list is just a starting point. Change
-          models any time in Settings.
+          You can install any other local model yourself (built-in engine: drop a .gguf file into
+          the models folder; Ollama: <code>{'ollama pull <model>'}</code>) — this list is just a
+          starting point. Change engines and models any time in Settings.
         </p>
       </div>
     </div>
