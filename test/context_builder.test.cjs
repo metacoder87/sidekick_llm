@@ -17,6 +17,7 @@ function stubOllama() {
   };
   return {
     generateEmbedding: async ({ input }) => axis(input),
+    generateEmbeddingDetailed: async ({ input }) => ({ vector: axis(input), error: null }),
     generateChatSync: async () => '[]',
   };
 }
@@ -189,6 +190,93 @@ test('buildChatContext always includes the profile and omits specialist context 
   assert.match(result.systemContent, /Ada/);
   assert.equal(result.specialistGrounding, null);
   assert.deepEqual(result.citations, []);
+
+  repository.close();
+});
+
+test('buildChatContext surfaces groundingDisabled when the preflight flags the embedder as unavailable', async () => {
+  const { repository, ollama, memoryManager, researchWorker, allSettings } = setup();
+  const embeddingModel = allSettings.embeddingModel;
+
+  const hub = repository.createSpecialistHub({
+    name: 'Legal Expert',
+    systemPrompt: 'Read contracts literally.',
+  });
+  // No chunks saved — with the embedder ruled out, nothing can be retrieved.
+  const conversation = repository.createConversation('Contract review');
+  const result = await buildChatContext({
+    repository,
+    ollama,
+    memoryManager,
+    researchWorker,
+    content: 'What is the liability cap?',
+    conversationId: conversation.id,
+    // Simulate the IPC preflight having ruled the embedder out.
+    payload: {
+      activeSpecialistIds: [hub.id],
+      groundingDisabled: {
+        reason: `Embedding model "${embeddingModel}" is not available: not downloaded.`,
+      },
+    },
+    model: 'chat-model',
+    embeddingModel,
+    backgroundModel: 'bg-model',
+    allSettings,
+    isWebSearchEnabled: false,
+  });
+
+  // Embedding was skipped entirely; the reason is surfaced in grounding payload.
+  assert.equal(result.specialistGrounding?.groundingDisabled?.reason, `Embedding model "${embeddingModel}" is not available: not downloaded.`);
+  assert.equal(result.specialistGrounding?.grounded, false);
+  assert.equal(result.specialistGrounding?.matches, 0);
+
+  repository.close();
+});
+
+test('buildChatContext degrades to keyword-only retrieval when the embedding model fails at runtime', async () => {
+  const { repository, memoryManager, researchWorker, allSettings } = setup();
+  const embeddingModel = allSettings.embeddingModel;
+
+  // An embedder that always fails — simulates a missing/misconfigured GGUF.
+  const failingOllama = {
+    generateEmbedding: async () => null,
+    generateEmbeddingDetailed: async () => ({ vector: null, error: 'Model not found' }),
+    generateChatSync: async () => '[]',
+  };
+
+  const hub = repository.createSpecialistHub({
+    name: 'Legal Expert',
+    systemPrompt: 'Read contracts literally.',
+  });
+  repository.saveSpecialistChunk({
+    hubId: hub.id,
+    sourceTitle: 'agreement.pdf',
+    chunkText: 'Clause 7.2 caps liability at fees paid in the prior twelve months.',
+    embedding: [1, 0, 0],
+    embeddingModel,
+  });
+
+  const conversation = repository.createConversation('Contract review');
+  const result = await buildChatContext({
+    repository,
+    ollama: failingOllama,
+    memoryManager,
+    researchWorker,
+    content: 'liability cap', // keyword matches the vault chunk
+    conversationId: conversation.id,
+    payload: { activeSpecialistIds: [hub.id] },
+    model: 'chat-model',
+    embeddingModel,
+    backgroundModel: 'bg-model',
+    allSettings,
+    isWebSearchEnabled: false,
+  });
+
+  // Embedding failed, so groundingDisabled is set.
+  assert.equal(result.specialistGrounding?.groundingDisabled?.reason, `Embedding model "${embeddingModel}" is not available for retrieval. Vault search is keyword-only until the model is downloaded or the engine is switched.`);
+  // But keyword search still found the chunk — vault is not invisible.
+  assert.equal(result.specialistGrounding?.matches, 1);
+  assert.match(result.systemContent, /Clause 7\.2 caps liability/);
 
   repository.close();
 });

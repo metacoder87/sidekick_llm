@@ -132,11 +132,26 @@ async function buildChatContext({
       });
 
       // Embed every planned query once (the original plus any sub-questions or
-      // contradiction probes).
+      // contradiction probes). Track whether the embedding model is available so
+      // retrieval can degrade to keyword-only instead of returning zero results.
+      // If the IPC preflight already ruled the embedder out, skip embedding entirely.
+      let embeddingUnavailable = Boolean(payload?.groundingDisabled);
       const embeddings = [];
-      for (const q of retrievalQueries) {
-        const emb = await ollama.generateEmbedding({ model: embeddingModel, input: q });
-        if (emb && emb.length > 0) embeddings.push({ query: q, embedding: emb });
+      if (!embeddingUnavailable) {
+        for (const q of retrievalQueries) {
+          const { vector, error } = await ollama.generateEmbeddingDetailed({
+            model: embeddingModel,
+            input: q,
+          });
+          if (vector && vector.length > 0) {
+            embeddings.push({ query: q, embedding: vector });
+          } else {
+            embeddingUnavailable = true;
+            console.error(
+              `Specialist retrieval: embedding unavailable for query "${q}" — ${error || 'unknown error'}`,
+            );
+          }
+        }
       }
 
       const hubs = [];
@@ -155,6 +170,15 @@ async function buildChatContext({
             repository.searchSpecialistVectorMemory(hub.id, embedding, 8, embeddingModel) || [];
           const keywordMatches = repository.searchSpecialistKeyword(hub.id, query, 8) || [];
           perQuery.push(fuseHybrid(vectorMatches, keywordMatches, 8));
+        }
+
+        // When the embedding model is unavailable, keyword search still runs on the
+        // raw question so the vault is not invisible. Without this, an empty
+        // `embeddings` array skipped both vector AND keyword search, yielding zero
+        // results for every Expert.
+        if (embeddingUnavailable && embeddings.length === 0) {
+          const keywordMatches = repository.searchSpecialistKeyword(hub.id, content, 8) || [];
+          perQuery.push(fuseHybrid([], keywordMatches, 8));
         }
         groups.push({
           expert: { id: hub.id, name: hub.name },
@@ -234,6 +258,16 @@ async function buildChatContext({
                 total: aggregateSurvey.total,
               }
             : null,
+          // When the embedding model is unavailable, retrieval fell back to
+          // keyword-only (or returned nothing). Surface this so the UI can show an
+          // actionable banner instead of a generic ungrounded warning.
+          groundingDisabled: embeddingUnavailable
+            ? {
+                reason:
+                  payload?.groundingDisabled?.reason ||
+                  `Embedding model "${embeddingModel}" is not available for retrieval. Vault search is keyword-only until the model is downloaded or the engine is switched.`,
+              }
+            : null,
           // The exact chunks that were put in front of the model, with provenance.
           // Source cards are rendered FROM THIS — never parsed out of the model's
           // prose — so a citation is always precise and verifiable (invariant #1).
@@ -265,7 +299,10 @@ async function buildChatContext({
       (h) => !activeSpecialistIds.includes(h.id) && h.retrievableChunkCount > 0,
     );
     if (notConsulted.length > 0) {
-      const probe = await ollama.generateEmbedding({ model: embeddingModel, input: content });
+      const { vector: probe } = await ollama.generateEmbeddingDetailed({
+        model: embeddingModel,
+        input: content,
+      });
       if (probe && probe.length > 0) {
         const candidateGroups = notConsulted.slice(0, 12).map((hub) => ({
           expert: { id: hub.id, name: hub.name },
