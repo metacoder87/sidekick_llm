@@ -11,6 +11,7 @@ import ExpertLibraryModal from './components/ExpertLibraryModal';
 import LockScreen from './components/LockScreen';
 import Onboarding from './components/Onboarding';
 import ThemeToggle from './components/ThemeToggle';
+import TopBar from './components/TopBar';
 
 function moveConversationToFront(items, conversation) {
   const rest = items.filter((item) => item.id !== conversation.id);
@@ -46,6 +47,7 @@ export default function App() {
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [theme, setTheme] = useState('cyberpunk');
   const [sidebarWidth, setSidebarWidth] = useState(320);
+  const [isSidebarHidden, setIsSidebarHidden] = useState(false);
 
   // Modals state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -85,7 +87,11 @@ export default function App() {
   const messagesRef = useRef(null);
 
   const activeConversationId = activeConversation?.id || null;
-  const disableComposer = !sidekick || !ollamaStatus.available || !activeModel || !!streamRequestId;
+  // Composer is disabled when the bridge is unavailable, no model is selected,
+  // or a stream is in flight. It must NOT depend on ollamaStatus.available —
+  // that is Ollama-specific. The built-in engine works without Ollama, so
+  // checking Ollama availability here would dead the app for built-in users.
+  const disableComposer = !sidekick || !activeModel || !!streamRequestId;
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -112,10 +118,15 @@ export default function App() {
       return;
     }
 
-    const [status, listedModels, selectedModel, allSettings] = await Promise.all([
-      sidekick.ollama.getStatus(),
-      sidekick.models.list().catch(() => []),
-      sidekick.models.getActive().catch(() => ''),
+    // Resolve the active model first: it may switch engines when the previously
+    // selected engine has no usable model but the other one does.
+    const selectedModel = await sidekick.models.getActive().catch(() => '');
+    const [listedModels, status, allSettings] = await Promise.all([
+      // Every downloaded model from BOTH engines, not just the active one — an
+      // existing Ollama install must be visible even when the built-in engine is
+      // the default.
+      sidekick.models.listAll().catch(() => []),
+      sidekick.ollama.getStatus().catch(() => ({ available: false, models: [] })),
       sidekick.settings.get().catch(() => ({})),
     ]);
 
@@ -123,9 +134,10 @@ export default function App() {
     setModels(listedModels);
     setActiveModel(selectedModel);
 
-    // Nothing to talk to, or nothing to talk with — guide the user rather than
-    // leaving them in a workspace that cannot answer.
-    const needsSetup = !status.available || (listedModels || []).length === 0;
+    // Nothing to talk with — guide the user rather than leaving them in a
+    // workspace that cannot answer. Only chat models count; an embedding-only
+    // install is not usable for conversation.
+    const needsSetup = !(listedModels || []).some((model) => model.role !== 'embedding');
     setShowOnboarding(needsSetup && !onboardingDismissedRef.current);
     if (allSettings) {
       if (allSettings.webSearchEnabled !== undefined) {
@@ -149,6 +161,21 @@ export default function App() {
       await sidekick.settings.set('webSearchEnabled', enabled ? 'true' : 'false');
     }
   }
+
+  // Refresh the engine status and model lists only. Settings calls this after an
+  // engine switch, download, or delete; unlike refreshOllamaStatus it must not
+  // re-evaluate onboarding and replace the open Settings modal with the wizard.
+  const refreshModelLists = useCallback(async () => {
+    if (!sidekick) return;
+    const selectedModel = await sidekick.models.getActive().catch(() => '');
+    const [listedModels, status] = await Promise.all([
+      sidekick.models.listAll().catch(() => []),
+      sidekick.ollama.getStatus().catch(() => ({ available: false, models: [] })),
+    ]);
+    setOllamaStatus(status);
+    setModels(listedModels);
+    setActiveModel(selectedModel);
+  }, [sidekick]);
 
   const loadConversation = useCallback(
     async (conversationId) => {
@@ -534,13 +561,25 @@ export default function App() {
     }
   }
 
-  async function handleModelChange(modelName) {
+  async function handleModelChange(modelName, engine) {
     if (!sidekick) {
-      return;
+      return null;
     }
 
-    await sidekick.models.setActive(modelName);
+    // The grouped picker includes both engines. Carry the engine with the
+    // selection so picking an Ollama model switches to Ollama in one step
+    // instead of silently selecting a model the active engine cannot load.
+    const chosen =
+      (models || []).find(
+        (model) => model.name === modelName && (!engine || model.engine === engine),
+      ) || (models || []).find((model) => model.name === modelName);
+    const result = await sidekick.models.setActive({
+      name: modelName,
+      engine: engine || chosen?.engine,
+    });
     setActiveModel(modelName);
+    await refreshModelLists();
+    return result;
   }
 
   // Toggle one expert in/out of the panel. `null` clears the whole panel
@@ -766,191 +805,210 @@ export default function App() {
   const activeTitle = activeConversation?.title || 'New Conversation';
 
   return (
-    <main className="app-shell" style={{ gridTemplateColumns: `${sidebarWidth}px auto 1fr` }}>
-      <Sidebar
-        conversations={conversations}
-        activeConversationId={activeConversationId}
-        searchQuery={searchQuery}
-        onSearchQueryChange={setSearchQuery}
-        onNewConversation={handleCreateConversation}
-        onSelectConversation={loadConversation}
-        onRenameConversation={handleRenameConversation}
-        onDeleteConversation={handleDeleteConversation}
-        onExportAll={handleExportAll}
-        onImportAll={handleImportAll}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        onOpenSpecialistPicker={() => setIsSpecialistPickerOpen(true)}
-        activeSpecialistHubs={activeSpecialistHubs}
+    <div className="app-root">
+      <TopBar
+        isSidebarHidden={isSidebarHidden}
+        onToggleSidebar={() => setIsSidebarHidden((hidden) => !hidden)}
+        onOpenExperts={() => setIsSpecialistPickerOpen(true)}
+        expertCount={activeSpecialistHubs.length}
+        onOpenOptions={() => setIsSettingsOpen(true)}
+        windowControls={sidekick?.window || null}
       />
 
-      <ResizableDivider onResize={handleResizeSidebar} />
-
-      <section
-        className={`workspace${isDragging ? ' workspace--dropping' : ''}`}
-        onDragOver={(event) => {
-          // Only react to actual files, not text selections being dragged around.
-          if (Array.from(event.dataTransfer.types || []).includes('Files')) {
-            event.preventDefault();
-            setIsDragging(true);
-          }
-        }}
-        onDragLeave={(event) => {
-          if (event.currentTarget === event.target) setIsDragging(false);
-        }}
-        onDrop={(event) => {
-          if (Array.from(event.dataTransfer.types || []).includes('Files')) {
-            event.preventDefault();
-            setIsDragging(false);
-            handleDropFiles(event.dataTransfer.files);
-          }
-        }}
+      <main
+        className="app-shell"
+        style={{ gridTemplateColumns: isSidebarHidden ? '1fr' : `${sidebarWidth}px auto 1fr` }}
       >
-        <header className="workspace__banner">
-          <div className="workspace__banner-info">
-            <h2 className="header-chat-title">{activeTitle}</h2>
-            {notice ? <span className="notice-badge">{notice}</span> : null}
-          </div>
-          <div className="workspace__banner-right">
-            {activeModel ? (
-              <span
-                className="model-pill-header"
-                onClick={() => setIsSettingsOpen(true)}
-                title="Click to change local model"
-              >
-                🤖 {activeModel}
-              </span>
-            ) : null}
-            {activeSpecialistHubs.length > 0 ? (
-              <span
-                className="consulting-label"
-                onClick={() => setIsSpecialistPickerOpen(true)}
-                title="Manage the consulting panel"
-              >
-                Consulting:
-              </span>
-            ) : null}
-            {/* Show a few pills, then collapse — a large panel would otherwise push
-                the header off the window. The full list stays available on hover. */}
-            {activeSpecialistHubs.slice(0, 3).map((hub) => (
-              <span
-                key={hub.id}
-                className="specialist-pill-header"
-                onClick={() => setIsSpecialistPickerOpen(true)}
-                title="Manage the consulting panel"
-              >
-                ⚡ {hub.name}
-              </span>
-            ))}
-            {activeSpecialistHubs.length > 3 ? (
-              <span
-                className="specialist-pill-header"
-                onClick={() => setIsSpecialistPickerOpen(true)}
-                title={activeSpecialistHubs
-                  .slice(3)
-                  .map((hub) => hub.name)
-                  .join(', ')}
-              >
-                +{activeSpecialistHubs.length - 3} more
-              </span>
-            ) : null}
-            <ThemeToggle theme={theme} onToggle={handleToggleTheme} />
-          </div>
-        </header>
+        {isSidebarHidden ? null : (
+          <>
+            <Sidebar
+              conversations={conversations}
+              activeConversationId={activeConversationId}
+              searchQuery={searchQuery}
+              onSearchQueryChange={setSearchQuery}
+              onNewConversation={handleCreateConversation}
+              onSelectConversation={loadConversation}
+              onRenameConversation={handleRenameConversation}
+              onDeleteConversation={handleDeleteConversation}
+              onExportAll={handleExportAll}
+              onImportAll={handleImportAll}
+              onOpenSettings={() => setIsSettingsOpen(true)}
+              onOpenSpecialistPicker={() => setIsSpecialistPickerOpen(true)}
+              activeSpecialistHubs={activeSpecialistHubs}
+            />
 
-        {isDragging ? (
-          <div className="drop-overlay">
-            <div className="drop-overlay__panel">
-              <strong>📄 Drop to ask about this document</strong>
-              <span>It becomes an Expert you can consult — PDF, TXT, MD, JSON, CSV</span>
+            <ResizableDivider onResize={handleResizeSidebar} />
+          </>
+        )}
+
+        <section
+          className={`workspace${isDragging ? ' workspace--dropping' : ''}`}
+          onDragOver={(event) => {
+            // Only react to actual files, not text selections being dragged around.
+            if (Array.from(event.dataTransfer.types || []).includes('Files')) {
+              event.preventDefault();
+              setIsDragging(true);
+            }
+          }}
+          onDragLeave={(event) => {
+            if (event.currentTarget === event.target) setIsDragging(false);
+          }}
+          onDrop={(event) => {
+            if (Array.from(event.dataTransfer.types || []).includes('Files')) {
+              event.preventDefault();
+              setIsDragging(false);
+              handleDropFiles(event.dataTransfer.files);
+            }
+          }}
+        >
+          <header className="workspace__banner">
+            <div className="workspace__banner-info">
+              <h2 className="header-chat-title">{activeTitle}</h2>
+              {notice ? <span className="notice-badge">{notice}</span> : null}
             </div>
+            <div className="workspace__banner-right">
+              {activeModel ? (
+                <span
+                  className="model-pill-header"
+                  onClick={() => setIsSettingsOpen(true)}
+                  title="Click to change local model"
+                >
+                  🤖 {activeModel}
+                </span>
+              ) : null}
+              {activeSpecialistHubs.length > 0 ? (
+                <span
+                  className="consulting-label"
+                  onClick={() => setIsSpecialistPickerOpen(true)}
+                  title="Manage the consulting panel"
+                >
+                  Consulting:
+                </span>
+              ) : null}
+              {/* Show a few pills, then collapse — a large panel would otherwise push
+                the header off the window. The full list stays available on hover. */}
+              {activeSpecialistHubs.slice(0, 3).map((hub) => (
+                <span
+                  key={hub.id}
+                  className="specialist-pill-header"
+                  onClick={() => setIsSpecialistPickerOpen(true)}
+                  title="Manage the consulting panel"
+                >
+                  ⚡ {hub.name}
+                </span>
+              ))}
+              {activeSpecialistHubs.length > 3 ? (
+                <span
+                  className="specialist-pill-header"
+                  onClick={() => setIsSpecialistPickerOpen(true)}
+                  title={activeSpecialistHubs
+                    .slice(3)
+                    .map((hub) => hub.name)
+                    .join(', ')}
+                >
+                  +{activeSpecialistHubs.length - 3} more
+                </span>
+              ) : null}
+              <ThemeToggle theme={theme} onToggle={handleToggleTheme} />
+            </div>
+          </header>
+
+          {isDragging ? (
+            <div className="drop-overlay">
+              <div className="drop-overlay__panel">
+                <strong>📄 Drop to ask about this document</strong>
+                <span>It becomes an Expert you can consult — PDF, TXT, MD, JSON, CSV</span>
+              </div>
+            </div>
+          ) : null}
+
+          {isIngestingDrop ? (
+            <div className="roundtable-status">📄 Indexing the document…</div>
+          ) : null}
+
+          {roundtableStatus ? <div className="roundtable-status">🗣️ {roundtableStatus}</div> : null}
+
+          <div className="workspace__chat" ref={messagesRef}>
+            <ChatView
+              conversation={activeConversation}
+              streamRequestId={streamRequestId}
+              activeSpecialists={activeSpecialistHubs}
+              onExportConversation={handleExportConversation}
+              onSaveNote={handleSaveNote}
+              onAddExpert={handleSelectSpecialist}
+            />
           </div>
-        ) : null}
 
-        {isIngestingDrop ? (
-          <div className="roundtable-status">📄 Indexing the document…</div>
-        ) : null}
-
-        {roundtableStatus ? <div className="roundtable-status">🗣️ {roundtableStatus}</div> : null}
-
-        <div className="workspace__chat" ref={messagesRef}>
-          <ChatView
-            conversation={activeConversation}
-            streamRequestId={streamRequestId}
-            activeSpecialists={activeSpecialistHubs}
-            onExportConversation={handleExportConversation}
-            onSaveNote={handleSaveNote}
-            onAddExpert={handleSelectSpecialist}
+          <Composer
+            disabled={disableComposer}
+            isStreaming={!!streamRequestId}
+            webSearchEnabled={webSearchEnabled}
+            onToggleWebSearch={handleToggleWebSearch}
+            onSend={handleSendMessage}
+            onCancel={handleCancelGeneration}
+            expertCount={activeSpecialistHubs.length}
+            panelMode={panelMode}
+            onPanelModeChange={handlePanelModeChange}
+            rounds={rounds}
+            onRoundsChange={handleRoundsChange}
+            onAnswerNow={handleAnswerNow}
+            isRoundtableRunning={!!streamRequestId && !!roundtableStatus}
           />
-        </div>
+        </section>
 
-        <Composer
-          disabled={disableComposer}
-          isStreaming={!!streamRequestId}
+        <SettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          sidekick={sidekick}
+          models={models}
+          activeModel={activeModel}
+          onModelChange={handleModelChange}
+          ollamaStatus={ollamaStatus}
           webSearchEnabled={webSearchEnabled}
           onToggleWebSearch={handleToggleWebSearch}
-          onSend={handleSendMessage}
-          onCancel={handleCancelGeneration}
-          expertCount={activeSpecialistHubs.length}
-          panelMode={panelMode}
-          onPanelModeChange={handlePanelModeChange}
-          rounds={rounds}
-          onRoundsChange={handleRoundsChange}
-          onAnswerNow={handleAnswerNow}
-          isRoundtableRunning={!!streamRequestId && !!roundtableStatus}
+          onModelsRefresh={refreshModelLists}
         />
-      </section>
 
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        sidekick={sidekick}
-        models={models}
-        activeModel={activeModel}
-        onModelChange={handleModelChange}
-        ollamaStatus={ollamaStatus}
-        webSearchEnabled={webSearchEnabled}
-        onToggleWebSearch={handleToggleWebSearch}
-      />
+        <SpecialistPickerModal
+          isOpen={isSpecialistPickerOpen}
+          onClose={() => setIsSpecialistPickerOpen(false)}
+          sidekick={sidekick}
+          activeSpecialistIds={activeSpecialistIds}
+          onSelectSpecialist={handleSelectSpecialist}
+          onOpenCreateModal={() => {
+            setSpecialistToEdit(null);
+            setIsSpecialistModalOpen(true);
+          }}
+          onOpenEditModal={(hub) => {
+            setSpecialistToEdit(hub);
+            setIsSpecialistModalOpen(true);
+          }}
+          onOpenLibrary={() => setIsLibraryOpen(true)}
+        />
 
-      <SpecialistPickerModal
-        isOpen={isSpecialistPickerOpen}
-        onClose={() => setIsSpecialistPickerOpen(false)}
-        sidekick={sidekick}
-        activeSpecialistIds={activeSpecialistIds}
-        onSelectSpecialist={handleSelectSpecialist}
-        onOpenCreateModal={() => {
-          setSpecialistToEdit(null);
-          setIsSpecialistModalOpen(true);
-        }}
-        onOpenEditModal={(hub) => {
-          setSpecialistToEdit(hub);
-          setIsSpecialistModalOpen(true);
-        }}
-        onOpenLibrary={() => setIsLibraryOpen(true)}
-      />
-
-      <ExpertLibraryModal
-        isOpen={isLibraryOpen}
-        onClose={() => setIsLibraryOpen(false)}
-        sidekick={sidekick}
-        // A freshly installed Expert joins the consulting panel immediately.
-        onInstalled={(hub) =>
-          applySpecialistSelection([...new Set([...activeSpecialistIds, hub.id])])
-        }
-      />
-
-      <SpecialistModal
-        key={specialistToEdit?.id || 'new'}
-        isOpen={isSpecialistModalOpen}
-        onClose={() => setIsSpecialistModalOpen(false)}
-        sidekick={sidekick}
-        hubToEdit={specialistToEdit}
-        onHubSaved={(saved) => {
-          if (activeSpecialistIds.includes(saved.id)) {
-            setActiveSpecialistHubs((hubs) => hubs.map((h) => (h.id === saved.id ? saved : h)));
+        <ExpertLibraryModal
+          isOpen={isLibraryOpen}
+          onClose={() => setIsLibraryOpen(false)}
+          sidekick={sidekick}
+          // A freshly installed Expert joins the consulting panel immediately.
+          onInstalled={(hub) =>
+            applySpecialistSelection([...new Set([...activeSpecialistIds, hub.id])])
           }
-        }}
-      />
-    </main>
+        />
+
+        <SpecialistModal
+          key={specialistToEdit?.id || 'new'}
+          isOpen={isSpecialistModalOpen}
+          onClose={() => setIsSpecialistModalOpen(false)}
+          sidekick={sidekick}
+          hubToEdit={specialistToEdit}
+          onHubSaved={(saved) => {
+            if (activeSpecialistIds.includes(saved.id)) {
+              setActiveSpecialistHubs((hubs) => hubs.map((h) => (h.id === saved.id ? saved : h)));
+            }
+          }}
+        />
+      </main>
+    </div>
   );
 }
