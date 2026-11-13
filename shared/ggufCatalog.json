@@ -1,0 +1,101 @@
+{
+  "catalogVersion": 2,
+  "source": "huggingface",
+  "note": "Curated starting points for the built-in node-llama-cpp engine. Every entry is a Q4_K_M GGUF from a well-known HuggingFace repo — good quality-to-size ratio for the target hardware. minRamGB is a conservative floor for running the model at a usable speed. Any local .gguf file dropped into the models folder is picked up automatically, so this list is a convenience, not a limit.",
+  "models": [
+    {
+      "id": "nomic-embed-text-v1.5",
+      "label": "Embeddings (required)",
+      "role": "embedding",
+      "repo": "nomic-ai/nomic-embed-text-v1.5-GGUF",
+      "file": "nomic-embed-text-v1.5.Q8_0.gguf",
+      "revision": "main",
+      "sha256": null,
+      "sizeGB": 0.15,
+      "minRamGB": 4,
+      "required": true,
+      "description": "Turns your documents into searchable vectors. Sidekick's Experts and memory cannot work without an embedding model — this one is small, fast and purpose-built.",
+      "why": "Required. Everything retrieval-related depends on it."
+    },
+    {
+      "id": "Qwen3-8B-Q4_K_M",
+      "label": "Balanced (recommended)",
+      "role": "chat",
+      "repo": "Qwen/Qwen3-8B-GGUF",
+      "file": "Qwen3-8B-Q4_K_M.gguf",
+      "revision": "main",
+      "sha256": null,
+      "sizeGB": 5.03,
+      "minRamGB": 16,
+      "recommended": true,
+      "description": "A balanced local assistant for general conversation, research and code.",
+      "why": "Recommended first-run choice. Pair it with the required Nomic embedding model."
+    },
+    {
+      "id": "Qwen2.5-3B-Instruct-Q4_K_M",
+      "label": "Small & fast",
+      "role": "background",
+      "repo": "bartowski/Qwen2.5-3B-Instruct-GGUF",
+      "file": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+      "sizeGB": 1.95,
+      "minRamGB": 8,
+      "description": "Quick, light model. Ideal for Sidekick's background work — summaries, fact extraction and research query generation — so your main model stays free for answering.",
+      "why": "Best pick for the Background / Utility model slot."
+    },
+    {
+      "id": "Llama-3.1-8B-Instruct-Q4_K_M",
+      "label": "Balanced alternative",
+      "role": "chat",
+      "repo": "lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF",
+      "file": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+      "sizeGB": 5.15,
+      "minRamGB": 16,
+      "description": "A solid general-purpose assistant. Good reasoning at a size most machines can run comfortably.",
+      "why": "The best all-round starting point for conversation."
+    },
+    {
+      "id": "Mistral-7B-Instruct-v0.3-Q4_K_M",
+      "label": "Balanced alternative",
+      "role": "chat",
+      "repo": "bartowski/Mistral-7B-Instruct-v0.3-GGUF",
+      "file": "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
+      "sizeGB": 4.41,
+      "minRamGB": 16,
+      "description": "Fast and capable, with a different style to Llama. Worth having as a second opinion in a Round Table.",
+      "why": "Different model families disagree in useful ways on a panel."
+    },
+    {
+      "id": "Qwen2.5-7B-Instruct-Q4_K_M",
+      "label": "Academic & coding",
+      "role": "chat",
+      "repo": "bartowski/Qwen2.5-7B-Instruct-GGUF",
+      "file": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+      "sizeGB": 4.72,
+      "minRamGB": 16,
+      "description": "Strong at structured reasoning, analysis and code — a good voice for research-heavy Experts.",
+      "why": "Pairs well with the academic and legal personas."
+    },
+    {
+      "id": "Qwen2.5-14B-Instruct-Q4_K_M",
+      "label": "More accurate",
+      "role": "chat",
+      "repo": "lmstudio-community/Qwen2.5-14B-Instruct-GGUF",
+      "file": "Qwen2.5-14B-Instruct-Q4_K_M.gguf",
+      "sizeGB": 9.02,
+      "minRamGB": 32,
+      "description": "Noticeably stronger reasoning and instruction-following. Slower, but better for analysis, legal and medical work.",
+      "why": "Choose this when accuracy matters more than speed."
+    },
+    {
+      "id": "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M",
+      "label": "Coding specialist",
+      "role": "chat",
+      "repo": "lmstudio-community/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
+      "file": "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf",
+      "sizeGB": 8.3,
+      "minRamGB": 32,
+      "description": "A MoE coding model: fast for its quality because only part of its weights activate per token.",
+      "why": "For software Engineering and technical-writing Experts."
+    }
+  ]
+}
