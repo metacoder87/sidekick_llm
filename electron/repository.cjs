@@ -11,11 +11,14 @@ const { randomUUID, createHash } = require('node:crypto');
 // MIGRATIONS whenever the schema changes. The corpus is the project's asset
 // (see ROADMAP.md §3) — every migration runs behind a backup and an integrity
 // check so a bad upgrade can never destroy user data.
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 const MAX_BACKUPS = 5;
 
 const DEFAULT_TITLE = 'New conversation';
 const DEFAULT_SETTINGS = {
+  // Native inference is the default. Ollama remains an Advanced compatibility
+  // provider only; it is never started or contacted by the default path.
+  llmProvider: 'builtin',
   ollamaBaseUrl: 'http://localhost:11434',
   webSearchEnabled: 'false',
   searchProvider: 'duckduckgo',
@@ -26,7 +29,7 @@ const DEFAULT_SETTINGS = {
   // Embeddings use a dedicated model, decoupled from the chat model, so switching
   // the chat model never changes vector dimensions and orphans the vault
   // (ROADMAP §3 invariant #5). nomic-embed-text is 768-d and purpose-built.
-  embeddingModel: 'nomic-embed-text',
+  embeddingModel: 'nomic-embed-text-v1.5',
   // Optional fast model for background/utility work (summaries, fact extraction,
   // research query generation). Empty = use the active chat model. Lets a user chat
   // with a large model while cheap background tasks run on a small one (invariant #5).
@@ -81,6 +84,40 @@ function assertValidEmbedding(embedding) {
       throw new Error('Embedding contains a non-finite value — refusing to store.');
     }
   }
+}
+
+// Ollama ships Nomic Embed Text v1.5 as `nomic-embed-text` (often returned as
+// `nomic-embed-text:latest`), while the built-in GGUF catalog calls the same
+// 768-d model `nomic-embed-text-v1.5`. Migration v9 rewrote the setting to the
+// built-in id but deliberately left existing chunk provenance untouched, so
+// without alias-aware comparisons every pre-migration vault reads as
+// "0 retrievable" even though its vectors are compatible. Keep this list to
+// models that genuinely share one vector space.
+const EMBEDDING_MODEL_FAMILIES = [['nomic-embed-text', 'nomic-embed-text-v1.5']];
+
+function embeddingModelVariants(model) {
+  const raw = String(model ?? '').trim();
+  if (!raw) return [];
+
+  const names = new Set([raw]);
+  // Ollama treats an untagged model as `:latest`; chunk rows written before the
+  // tag was part of the setting use the untagged form.
+  if (raw.endsWith(':latest')) names.add(raw.slice(0, -':latest'.length));
+
+  for (const family of EMBEDDING_MODEL_FAMILIES) {
+    for (const name of [...names]) {
+      const index = family.indexOf(name);
+      if (index === -1) continue;
+      for (const alias of family) names.add(alias);
+    }
+  }
+
+  return [...names];
+}
+
+function embeddingModelsMatch(first, second) {
+  const secondVariants = new Set(embeddingModelVariants(second));
+  return embeddingModelVariants(first).some((name) => secondVariants.has(name));
 }
 
 // Canonical form of a fact for de-duplication: case-insensitive, whitespace-
@@ -468,6 +505,38 @@ class ConversationRepository {
               hash TEXT NOT NULL
             );
           `);
+        },
+      },
+      {
+        // Native inference migration: old Ollama vectors retain their model
+        // provenance and are therefore excluded until a native re-index. Only
+        // add missing settings; never overwrite an explicit compatibility choice.
+        version: 9,
+        up: () => {
+          const hasSettings = this.db
+            .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings'")
+            .get();
+          if (!hasSettings) return;
+          this.db
+            .prepare(
+              "INSERT INTO settings (key, value) VALUES ('llmProvider', 'builtin') ON CONFLICT(key) DO NOTHING",
+            )
+            .run();
+          this.db
+            .prepare(
+              "INSERT INTO settings (key, value) VALUES ('embeddingModel', 'nomic-embed-text-v1.5') ON CONFLICT(key) DO NOTHING",
+            )
+            .run();
+          this.db
+            .prepare(
+              "UPDATE settings SET value = 'nomic-embed-text-v1.5' WHERE key = 'embeddingModel' AND value = 'nomic-embed-text'",
+            )
+            .run();
+          this.db
+            .prepare(
+              "UPDATE settings SET value = '' WHERE key = 'activeModel' AND value LIKE '%:%'",
+            )
+            .run();
         },
       },
     ];
@@ -1306,7 +1375,9 @@ class ConversationRepository {
 
     const currentEmbeddingModel = this.getSetting('embeddingModel');
     const packModels = (pack.manifest && pack.manifest.embeddingModels) || [];
-    const retrievable = packModels.length === 0 || packModels.includes(currentEmbeddingModel);
+    const retrievable =
+      packModels.length === 0 ||
+      packModels.some((model) => embeddingModelsMatch(model, currentEmbeddingModel));
 
     const hub = this.createSpecialistHub({
       name: `${pack.expert.name}${nameSuffix}`,
@@ -1589,13 +1660,21 @@ class ConversationRepository {
   // Every hub reports two counts:
   //   chunkCount            — total stored chunks
   //   retrievableChunkCount — chunks embedded with the CURRENTLY configured
-  //                           embedding model, i.e. the ones retrieval can actually
-  //                           match. When these diverge, some chunks were embedded
-  //                           with a different (or no) model and are dead until
-  //                           re-indexed (Phase 4). The UI uses the gap to warn and
-  //                           to offer re-indexing (ROADMAP §5 Phase 3/4).
+  //                           embedding model (or a known alias of it, such as
+  //                           Ollama's `nomic-embed-text` vs. the native
+  //                           `nomic-embed-text-v1.5`), i.e. the ones retrieval
+  //                           can actually match. When these diverge, some chunks
+  //                           were embedded with a different (or no) model and are
+  //                           dead until re-indexed (Phase 4). The UI uses the gap
+  //                           to warn and to offer re-indexing (ROADMAP §5 Phase 3/4).
   listSpecialistHubs() {
-    const embeddingModel = this.getSetting('embeddingModel');
+    const embeddingModels = embeddingModelVariants(this.getSetting('embeddingModel'));
+    const retrievableFilter = embeddingModels.length
+      ? `sc.embedding_model IN (${embeddingModels.map((_, i) => `@embeddingModel${i}`).join(', ')})`
+      : '0';
+    const params = Object.fromEntries(
+      embeddingModels.map((model, index) => [`embeddingModel${index}`, model]),
+    );
     return this.db
       .prepare(
         `
@@ -1609,12 +1688,12 @@ class ConversationRepository {
           h.updated_at AS updatedAt,
           (SELECT COUNT(*) FROM specialist_chunks sc WHERE sc.hub_id = h.id) AS chunkCount,
           (SELECT COUNT(*) FROM specialist_chunks sc
-             WHERE sc.hub_id = h.id AND sc.embedding_model = @embeddingModel) AS retrievableChunkCount
+             WHERE sc.hub_id = h.id AND ${retrievableFilter}) AS retrievableChunkCount
         FROM specialist_hubs h
         ORDER BY h.updated_at DESC
       `,
       )
-      .all({ embeddingModel });
+      .all(params);
   }
 
   getSpecialistHub(id) {
@@ -1635,15 +1714,18 @@ class ConversationRepository {
       )
       .get(id);
     if (!hub) return null;
-    const embeddingModel = this.getSetting('embeddingModel');
+    const embeddingModels = embeddingModelVariants(this.getSetting('embeddingModel'));
     const chunkCount = this.db
       .prepare(`SELECT COUNT(*) as count FROM specialist_chunks WHERE hub_id = ?`)
       .get(id).count;
-    const retrievableChunkCount = this.db
-      .prepare(
-        `SELECT COUNT(*) as count FROM specialist_chunks WHERE hub_id = ? AND embedding_model = ?`,
-      )
-      .get(id, embeddingModel).count;
+    const retrievableChunkCount = embeddingModels.length
+      ? this.db
+          .prepare(
+            `SELECT COUNT(*) as count FROM specialist_chunks
+             WHERE hub_id = ? AND embedding_model IN (${embeddingModels.map(() => '?').join(', ')})`,
+          )
+          .get(id, ...embeddingModels).count
+      : 0;
     return { ...hub, chunkCount, retrievableChunkCount };
   }
 
@@ -1747,19 +1829,36 @@ class ConversationRepository {
 
   // Chunks that need re-embedding for the given (current) model: everything not
   // already embedded with it — legacy NULL-model rows and rows from a previously
-  // configured model. Returns id + chunk_text so the worker can re-embed in place.
+  // configured model. Known aliases of the same model family are considered
+  // current, so switching between Ollama's and the built-in Nomic name does not
+  // trigger a pointless full re-index. Returns id + chunk_text so the worker can
+  // re-embed in place.
   listChunksForReindex(hubId, embeddingModel) {
+    const embeddingModels = embeddingModelVariants(embeddingModel);
+    if (embeddingModels.length === 0) {
+      return this.db
+        .prepare(
+          `
+          SELECT id, chunk_text AS chunkText
+          FROM specialist_chunks
+          WHERE hub_id = ?
+          ORDER BY created_at ASC
+        `,
+        )
+        .all(hubId);
+    }
+
     return this.db
       .prepare(
         `
         SELECT id, chunk_text AS chunkText
         FROM specialist_chunks
         WHERE hub_id = ?
-          AND (embedding_model IS NULL OR embedding_model != ?)
+          AND (embedding_model IS NULL OR embedding_model NOT IN (${embeddingModels.map(() => '?').join(', ')}))
         ORDER BY created_at ASC
       `,
       )
-      .all(hubId, embeddingModel);
+      .all(hubId, ...embeddingModels);
   }
 
   // Overwrite a single chunk's vector in place (used by re-indexing). Enforces the
@@ -2026,31 +2125,37 @@ class ConversationRepository {
     }
 
     // Restrict to vectors of the same dimension as the query. When the embedding
-    // model is known, also require it to match: a chunk from a different model
-    // lives in a different vector space and its similarity would be meaningless
-    // even at the same dimension (invariant #4).
+    // model is known, also require it to match (including known aliases such as
+    // Ollama's `nomic-embed-text` and the native `nomic-embed-text-v1.5`): a chunk
+    // from a different model lives in a different vector space and its similarity
+    // would be meaningless even at the same dimension (invariant #4).
     const dim = queryEmbedding.length;
     const columns = `id, hub_id, source_title, source_url, chunk_text, embedding_json,
                      location, page, char_start, char_end, source_type`;
-    const rows = embeddingModel
-      ? this.db
-          .prepare(
-            `
-            SELECT ${columns}
-            FROM specialist_chunks
-            WHERE hub_id = ? AND embedding_dim = ? AND embedding_model = ?
-          `,
-          )
-          .all(hubId, dim, embeddingModel)
-      : this.db
-          .prepare(
-            `
-            SELECT ${columns}
-            FROM specialist_chunks
-            WHERE hub_id = ? AND embedding_dim = ?
-          `,
-          )
-          .all(hubId, dim);
+    const embeddingModels = embeddingModel ? embeddingModelVariants(embeddingModel) : [];
+    let rows;
+    if (embeddingModels.length > 0) {
+      rows = this.db
+        .prepare(
+          `
+          SELECT ${columns}
+          FROM specialist_chunks
+          WHERE hub_id = ? AND embedding_dim = ?
+            AND embedding_model IN (${embeddingModels.map(() => '?').join(', ')})
+        `,
+        )
+        .all(hubId, dim, ...embeddingModels);
+    } else {
+      rows = this.db
+        .prepare(
+          `
+          SELECT ${columns}
+          FROM specialist_chunks
+          WHERE hub_id = ? AND embedding_dim = ?
+        `,
+        )
+        .all(hubId, dim);
+    }
 
     const scored = rows
       .map((row) => {

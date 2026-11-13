@@ -312,6 +312,81 @@ test('specialist hub reports retrievable vs total chunk counts by current embedd
   repository.close();
 });
 
+test('legacy Ollama Nomic vectors count as retrievable under the native Nomic model', () => {
+  const repository = new ConversationRepository(':memory:');
+  const currentModel = repository.getSetting('embeddingModel');
+  const hub = repository.createSpecialistHub({ name: 'Legacy Nomic' });
+
+  // Migration v9 changed the setting to the native catalog id but left the
+  // historical Ollama provenance on these rows. They are the same 768-d model.
+  repository.saveSpecialistChunk({
+    hubId: hub.id,
+    sourceTitle: 'ollama',
+    chunkText: 'legacy ollama vector',
+    embedding: [1, 0, 0],
+    embeddingModel: 'nomic-embed-text',
+  });
+  repository.saveSpecialistChunk({
+    hubId: hub.id,
+    sourceTitle: 'native',
+    chunkText: 'native vector',
+    embedding: [1, 0, 0],
+    embeddingModel: currentModel,
+  });
+  // A genuinely different model must still be treated as stale.
+  repository.saveSpecialistChunk({
+    hubId: hub.id,
+    sourceTitle: 'other',
+    chunkText: 'foreign vector',
+    embedding: [1, 0, 0],
+    embeddingModel: 'some-other-embedder',
+  });
+
+  const got = repository.getSpecialistHub(hub.id);
+  assert.equal(got.chunkCount, 3);
+  assert.equal(got.retrievableChunkCount, 2);
+
+  const listed = repository.listSpecialistHubs().find((h) => h.id === hub.id);
+  assert.equal(listed.chunkCount, 3);
+  assert.equal(listed.retrievableChunkCount, 2);
+
+  // Retrieval follows the same rule, so the count is not lying.
+  const hits = repository.searchSpecialistVectorMemory(hub.id, [1, 0, 0], 10, currentModel);
+  assert.equal(hits.length, 2);
+  assert.deepEqual(hits.map((hit) => hit.sourceTitle).sort(), ['native', 'ollama']);
+
+  // Only the genuinely foreign row needs re-embedding.
+  const stale = repository.listChunksForReindex(hub.id, currentModel);
+  assert.equal(stale.length, 1);
+  assert.equal(stale[0].chunkText, 'foreign vector');
+
+  // Ollama often exposes the untagged name as `:latest`; it is the same alias.
+  repository.setSetting('embeddingModel', 'nomic-embed-text:latest');
+  assert.equal(repository.getSpecialistHub(hub.id).retrievableChunkCount, 2);
+
+  repository.close();
+});
+
+test('an Expert Pack built with the Ollama Nomic name imports as retrievable', () => {
+  const repository = new ConversationRepository(':memory:');
+  const hub = repository.createSpecialistHub({ name: 'Ollama Pack' });
+  repository.saveSpecialistChunk({
+    hubId: hub.id,
+    sourceTitle: 's',
+    chunkText: 'pack text',
+    embedding: [1, 0, 0],
+    embeddingModel: 'nomic-embed-text',
+  });
+
+  const pack = repository.exportExpertPack(hub.id);
+  const result = repository.importExpertPack(pack);
+
+  assert.equal(result.chunksImported, 1);
+  assert.equal(result.retrievable, true);
+
+  repository.close();
+});
+
 test('reindexHub re-embeds stale/legacy chunks so they become retrievable', async () => {
   const repository = new ConversationRepository(':memory:');
   const model = repository.getSetting('embeddingModel'); // nomic-embed-text
